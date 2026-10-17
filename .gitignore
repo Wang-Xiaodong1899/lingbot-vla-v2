@@ -1,0 +1,51 @@
+# Local datasets, training runs, downloaded models, and simulator environments
+/data/
+/outputs/
+/weights/
+/evaluation/
+/RoboTwin/
+/lingbot-vla-2-robotwin-clean-bs512-step2k/
+/checkpoints/
+/wandb/
+/runs/
+
+# Python, notebooks, caches, and local environments
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.cache/
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Credentials and machine-local settings
+.env
+.env.*
+!.env.example
+.aws/
+
+# Model binaries, dataset shards, archives, and runtime logs
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.parquet
+*.arrow
+*.hdf5
+*.h5
+*.pkl
+*.zip
+*.tar
+*.tar.gz
+*.whl
+*.log
+*.pid
+
+# Generated training plots and exported scalar histories
+/robotwin_clean_training_loss.csv
+/robotwin_clean_training_loss.png
+/robotwin_clean_training_loss.svg

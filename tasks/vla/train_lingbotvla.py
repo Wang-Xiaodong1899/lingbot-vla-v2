@@ -16,6 +16,7 @@ from tqdm import trange
 from torch.utils.tensorboard import SummaryWriter
 from lingbotvla.utils.async_tb_writer import AsyncTBWriter
 from lingbotvla.checkpoint import build_checkpointer
+from lingbotvla.checkpoint.integrity import validate_checkpoint
 from lingbotvla.data import (
     OmniDataCollatorWithPacking,
     OmniDataCollatorWithPadding,
@@ -612,21 +613,30 @@ def main():
         epoch: int | None = None,
         epoch_step: int | None = None,
     ) -> None:
-        if args.train.global_rank != 0:
-            return
         if not args.train.save_hf_weights or checkpoint_path is None:
             return
-        hf_saver.submit(
-            global_step=step,
-            save_checkpoint_path=checkpoint_path,
-            output_dir=args.train.output_dir,
-            ckpt_manager=args.train.ckpt_manager,
-            save_ema=checkpoint_state.get("ema") is not None,
-            enable_fp32=args.train.enable_fp32,
-            model_assets=model_assets,
-            epoch=epoch,
-            epoch_step=epoch_step,
-        )
+        error = [None]
+        if args.train.global_rank == 0:
+            try:
+                hf_saver.submit(
+                    global_step=step,
+                    save_checkpoint_path=checkpoint_path,
+                    output_dir=args.train.output_dir,
+                    ckpt_manager=args.train.ckpt_manager,
+                    save_ema=checkpoint_state.get("ema") is not None,
+                    enable_fp32=args.train.enable_fp32,
+                    model_assets=model_assets,
+                    epoch=epoch,
+                    epoch_step=epoch_step,
+                )
+            except Exception as exc:
+                error[0] = repr(exc)
+        if not args.train.async_save_hf_weights:
+            # Peers must wait while rank zero merges the full CPU model.
+            # Starting the next training step here overlaps its memory peak.
+            dist.broadcast_object_list(error, src=0)
+        if error[0]:
+            raise RuntimeError(f'HF checkpoint export failed: {error[0]}')
 
     environ_meter = helper.EnvironMeter(
         config=model_config,
@@ -664,6 +674,8 @@ def main():
         for cp in candidates:
             state = {"model": model, "ema": None, "optimizer": optimizer, "extra_state": {}}  # cannot be None
             try:
+                if args.train.ckpt_manager == 'dcp':
+                    validate_checkpoint(cp, dist.get_world_size())
                 Checkpointer.load(cp, state, allow_partial_load=getattr(args.train, 'allow_partial_checkpoint', False))
                 global_step = state["extra_state"]["global_step"]
                 start_epoch = global_step // args.train.train_steps
@@ -684,7 +696,7 @@ def main():
                 logger.info_rank0(f"Failed to load checkpoint {cp}: {repr(e)}. Trying older one...")
                 continue
         if not loaded:
-            logger.info_rank0("Starting training from scratch. No valid checkpoint could be loaded.")
+            raise RuntimeError('Checkpoint resume failed; refusing to silently reset training state') from last_err
     else:
         logger.info_rank0("Starting training from scratch.")
 

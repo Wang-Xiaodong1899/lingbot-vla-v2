@@ -926,6 +926,7 @@ class FlowMatchingV2(FlowMatchingV1):
         state,
         noise=None,
         image_grid_thw=None,
+        return_velocity_trace=False,
     ) -> Tensor:
         """Do a full Qwen3-VL inference forward and compute the action."""
         bsize = state.shape[0]
@@ -984,6 +985,7 @@ class FlowMatchingV2(FlowMatchingV1):
                 )
                 self._compiled_predict_velocity = predict_velocity_fn
 
+        velocity_trace = []
         while time >= -dt / 2:
             count += 1
             expanded_time = time.expand(bsize)
@@ -996,9 +998,13 @@ class FlowMatchingV2(FlowMatchingV1):
                 prefix_position_ids=prefix_position_ids,
             )
 
+            if return_velocity_trace:
+                velocity_trace.append(v_t.clone())
             x_t += dt * v_t
             time += dt
         print(f"Denoise {count} steps")
+        if return_velocity_trace:
+            return x_t, torch.stack(velocity_trace, dim=0)
         return x_t
 
     def predict_velocity(

@@ -74,8 +74,6 @@ def main(usr_args):
     video_size = None
     video_fps = str(usr_args.get("video_fps", 10))
 
-    get_model = eval_function_decorator(policy_name, "get_model")
-
     with open(f"./task_config/{task_config}.yml", "r", encoding="utf-8") as f:
         args = yaml.load(f.read(), Loader=yaml.FullLoader)
 
@@ -167,7 +165,9 @@ def main(usr_args):
 
     st_seed = 100000 * (1 + seed)
     suc_nums = []
-    test_num = 100
+    test_num = int(usr_args.get("num_episodes", 100))
+    if test_num < 1:
+        raise ValueError("num_episodes must be positive")
     topk = 1
 
     # model = get_model(usr_args)
@@ -308,7 +308,9 @@ def eval_policy(task_name,
         path_to_pi_model = None
         if usr_args is not None and "new_ckpt_path" in usr_args:
             path_to_pi_model = usr_args['new_ckpt_path']
-        ret = model.infer(dict(reset = True, robo_name=usr_args['robo_name'], path_to_pi_model=path_to_pi_model))
+        ret = model.infer(dict(reset = True, robo_name=usr_args['robo_name'], path_to_pi_model=path_to_pi_model,
+                               episode_seed=now_seed))
+        executed_count = 0
         
         while TASK_ENV.take_action_cnt<TASK_ENV.step_lim and not succ:
             observation = TASK_ENV.get_obs()
@@ -321,6 +323,7 @@ def eval_policy(task_name,
                 
                 "observation.state": observation["joint_action"]["vector"],
                 "task": TASK_ENV.get_instruction(),
+                "executed_count": executed_count,
             }
 
             # print(formatted_observation["observation.images.cam_high"].shape)
@@ -341,20 +344,25 @@ def eval_policy(task_name,
             # from IPython import embed;embed()
             ret = model.infer(formatted_observation) #(TASK_ENV, model, observation)
             action, latency = ret['action'], ret['server_timing']
+            executed_count = 0
             if len(action.shape) == 2:
                 initial_obs = False
                 for act in action:
+                    if TASK_ENV.take_action_cnt >= TASK_ENV.step_lim:
+                        break
                     if initial_obs: # ensure the video is correct, but slow down simulation
                         # observation = TASK_ENV.get_obs()
                         pass
                     else:
                         initial_obs = True
                     TASK_ENV.take_action(act)
+                    executed_count += 1
                     if TASK_ENV.eval_success:
                         succ = True
                         break
             else:
                 TASK_ENV.take_action(action)
+                executed_count = 1
                 if TASK_ENV.eval_success:
                     succ = True
             

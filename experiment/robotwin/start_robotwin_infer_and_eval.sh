@@ -16,6 +16,7 @@
 #   --start_port        starting port (default: 9330)
 #   --pid_name          PID file prefix (default: test_pid)
 #   --num_tasks         number of sim tasks, taken in order from the task list (default: 50, max: 50)
+#   --num_episodes      episodes per task (default: 100)
 #   --num_gpus          total GPUs (default: 1)
 #   --num_per_gpu       inference servers per GPU (default: 1)
 #   --use_length        chunk length (default: 50)
@@ -49,6 +50,8 @@ conda_sh="${CONDA_SH:-/path/to/miniconda3/etc/profile.d/conda.sh}"
 start_port=9330
 pid_name="test_pid"
 num_tasks=50
+num_episodes=100
+resume_from=""
 num_gpus=1
 num_per_gpu=1
 use_length=50
@@ -72,6 +75,8 @@ while [[ $# -gt 0 ]]; do
         --start_port)        start_port="$2";        shift 2 ;;
         --pid_name)          pid_name="$2";          shift 2 ;;
         --num_tasks)         num_tasks="$2";         shift 2 ;;
+        --num_episodes)      num_episodes="$2";      shift 2 ;;
+        --resume_from)       resume_from="$2";       shift 2 ;;
         --num_gpus)          num_gpus="$2";          shift 2 ;;
         --num_per_gpu)       num_per_gpu="$2";       shift 2 ;;
         --use_length)        use_length="$2";        shift 2 ;;
@@ -99,6 +104,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --start_port        starting port (default: 9330)"
             echo "  --pid_name          PID file prefix (default: test_pid)"
             echo "  --num_tasks         number of sim tasks (default: 50, max: 50)"
+            echo "  --num_episodes      episodes per task (default: 100)"
+            echo "  --resume_from       previous run directory; reuse tasks that completed all episodes"
             echo "  --num_gpus          total GPUs (default: 1)"
             echo "  --num_per_gpu       inference servers per GPU (default: 1)"
             echo "  --use_length        chunk length (default: 50)"
@@ -150,7 +157,9 @@ cleanup() {
     done
     echo -e "\033[33m=== Cleanup done ===\033[0m"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 
 
@@ -193,8 +202,12 @@ echo -e "\033[36mSim-side python (${sim_env}): ${sim_python} ($(${sim_python} --
 conda deactivate 2>/dev/null || true
 
 # ===== Task count validation =====
-if [ "$num_tasks" -gt 50 ]; then
-    echo -e "\033[31mError: num_tasks ${num_tasks} exceeds max 50; use 1~50\033[0m"
+if ! [[ "$num_episodes" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: --num_episodes must be a positive integer"
+    exit 1
+fi
+if ! [[ "$num_tasks" =~ ^[1-9][0-9]*$ ]] || [ "$num_tasks" -gt 50 ]; then
+    echo -e "\033[31mError: num_tasks must be between 1 and 50\033[0m"
     exit 1
 fi
 
@@ -221,7 +234,41 @@ task_queue=()
 for i in $(seq 0 $((num_tasks-1))); do
     task_queue+=("${task_list_all[$i]}")
 done
-echo -e "\033[36mTasks this run (${num_tasks}): ${task_queue[*]}\033[0m"
+# Reuse only tasks with a final result and the requested number of episodes.
+# Partial tasks are rerun from the original seed in the new run directory.
+reused_task_names=()
+if [ -n "$resume_from" ]; then
+    if [ ! -d "$resume_from/eval_logs" ]; then
+        echo "Error: --resume_from must point to a previous evaluation run"
+        exit 1
+    fi
+    resume_from="$(cd "$resume_from" && pwd -P)"
+    pending_tasks=()
+    for task_name in "${task_queue[@]}"; do
+        previous_log="$resume_from/eval_logs/${task_name}.log"
+        previous_result="$resume_from/eval_results/${task_name}/_result.txt"
+        previous_episodes=""
+        if [ -f "$previous_log" ] && [ -f "$previous_result" ]; then
+            previous_episodes=$(sed 's/\x1b\[[0-9;]*m//g' "$previous_log" | grep 'Success rate:' | tail -1 | grep -oP '/\K\d+')
+        fi
+        if [ "$previous_episodes" = "$num_episodes" ]; then
+            reused_task_names+=("$task_name")
+        else
+            pending_tasks+=("$task_name")
+        fi
+    done
+    task_queue=("${pending_tasks[@]}")
+fi
+reused_tasks=${#reused_task_names[@]}
+if [ ${#task_queue[@]} -lt "$num_slots" ]; then
+    num_slots=${#task_queue[@]}
+fi
+if [ "$num_slots" -eq 0 ]; then
+    echo "All requested tasks already completed ${num_episodes} episodes: ${resume_from}"
+    exit 0
+fi
+echo "Reusing ${reused_tasks} completed tasks; pending tasks: ${#task_queue[@]}"
+echo -e "\033[36mTasks this run (${#task_queue[@]}): ${task_queue[*]}\033[0m"
 echo -e "\033[36mInference config: ${num_gpus} GPU x ${num_per_gpu} servers/GPU = ${num_slots} slots\033[0m"
 echo -e "\033[36mInference precision: use_bf16=${use_bf16}, use_fp32=${use_fp32}, use_compile=${use_compile}\033[0m"
 
@@ -229,8 +276,15 @@ echo -e "\033[36mInference precision: use_bf16=${use_bf16}, use_fp32=${use_fp32}
 batch_time=$(date +%Y%m%d_%H%M%S)
 # Extract experiment name and step from model_path (e.g. qwen35_robotwin_forward_no_mask_30k)
 _exp_name=$(echo "$model_path" | grep -oP '[^/]+(?=/checkpoints)')
+if [ -z "$_exp_name" ]; then
+    _exp_name=$(basename "$(dirname "$model_path")")
+fi
 _step_num=$(echo "$model_path" | grep -oP 'global_step_\K\d+')
 _step_k=$(( _step_num / 1000 ))k
+if [ -n "$resume_from" ] && [[ "${resume_from##*/}" != "${_exp_name}_${_step_k}_${task_config}_"* ]]; then
+    echo "Error: previous run does not match this checkpoint and task config"
+    exit 1
+fi
 run_dir="${output_base}/${_exp_name}_${_step_k}_${task_config}_${batch_time}"
 mkdir -p "${run_dir}/inference_logs" "${run_dir}/eval_logs"
 log_dir="${run_dir}"
@@ -246,6 +300,15 @@ declare -a result_task_names=()
 declare -a result_durations=()
 declare -a result_logs=()
 declare -a result_status=()
+for task_name in "${reused_task_names[@]}"; do
+    cp "$resume_from/eval_logs/${task_name}.log" "$run_dir/eval_logs/${task_name}.log"
+    mkdir -p "$run_dir/eval_results"
+    cp -a "$resume_from/eval_results/${task_name}" "$run_dir/eval_results/"
+    result_task_names+=("$task_name")
+    result_durations+=("reused")
+    result_logs+=("$run_dir/eval_logs/${task_name}.log")
+    result_status+=("reused")
+done
 
 # ============================================================
 # Phase 1: start inference-side QwenPi servers (resident)
@@ -298,6 +361,24 @@ for slot in $(seq 0 $((num_slots-1))); do
 done
 active_inference=$num_slots
 
+# Fail promptly if model initialization fails instead of leaving clients waiting forever.
+for slot in $(seq 0 $((num_slots-1))); do
+    port=$((start_port + slot))
+    ready_deadline=$((SECONDS + 900))
+    until "$sim_python" -c 'import sys, urllib.request; urllib.request.urlopen("http://127.0.0.1:" + sys.argv[1] + "/healthz", timeout=2).close()' "$port" >/dev/null 2>&1; do
+        if ! kill -0 "${inference_pids[$slot]}" 2>/dev/null; then
+            echo "Error: inference slot ${slot} exited during startup; inspect ${run_dir}/inference_logs"
+            exit 1
+        fi
+        if [ "$SECONDS" -ge "$ready_deadline" ]; then
+            echo "Error: inference slot ${slot} did not become ready within 900 seconds"
+            exit 1
+        fi
+        sleep 5
+    done
+    echo "Inference slot ${slot} ready on port ${port}"
+done
+
 # ============================================================
 # Phase 2: queue-scheduled sim tasks
 # ============================================================
@@ -310,7 +391,7 @@ cd "$eval_workdir" || { echo -e "\033[31mError: sim workdir ${eval_workdir} miss
 # must live at <RoboTwin>/script/ for _camera_config.yml to be found.
 eval_client_src="${inference_workdir}experiment/robotwin/eval_policy_client_lingbotvla.py"
 eval_client_dst="${eval_workdir}/script/eval_policy_client_lingbotvla.py"
-if [ ! -f "$eval_client_dst" ]; then
+if [ ! -f "$eval_client_dst" ] || ! cmp -s "$eval_client_src" "$eval_client_dst"; then
     if [ ! -f "$eval_client_src" ]; then
         echo -e "\033[31mError: eval client source not found: ${eval_client_src}\033[0m"
         exit 1
@@ -425,6 +506,7 @@ launch_task() {
         --overrides \
         --task_name ${task_name} \
         --task_config ${task_config} \
+        --num_episodes ${num_episodes} \
         --train_config_name ${train_config_name} \
         --seed ${seed} \
         --policy_name ${policy_name} \
@@ -584,13 +666,15 @@ echo -e "\033[36mGenerating stats file: ${stats_file}\033[0m"
     echo "  Model: ${_exp_name}_${_step_k}"
     echo "  Model path: ${model_path}"
     echo "  Tasks: ${num_tasks}"
+    echo "  Episodes per task: ${num_episodes}"
     echo "  Task Config: ${task_config}"
     echo "  Inference: ${num_gpus} GPU x ${num_per_gpu}/GPU = ${num_slots} slots"
     echo "  Precision: use_bf16=${use_bf16}, use_fp32=${use_fp32}, use_compile=${use_compile}"
-    echo "  Result: ${completed} done, ${skipped} skipped"
+    echo "  Result: $((completed + reused_tasks)) done (${reused_tasks} reused), ${skipped} skipped"
+    echo "  Resume source: ${resume_from:-none}"
     echo "============================================"
     echo ""
-    printf "%-30s %-10s %-12s %-10s %-10s\n" "Task" "Time(s)" "Done(100)" "Success/Total" "Rate"
+    printf "%-30s %-10s %-12s %-10s %-10s\n" "Task" "Time(s)" "Done(${num_episodes})" "Success/Total" "Rate"
     echo "--------------------------------------------------------------------------------"
 
     total_success=0
@@ -624,14 +708,14 @@ echo -e "\033[36mGenerating stats file: ${stats_file}\033[0m"
         # Check whether all 100 episodes ran
         if [ "$episodes_done" != "-" ]; then
             total_ep=$(echo "$episodes_done" | cut -d'/' -f2)
-            if [ "$total_ep" = "100" ]; then
+            if [ "$total_ep" = "$num_episodes" ]; then
                 complete_mark="YES"
             else
-                complete_mark="NO(${total_ep}/100)"
+                complete_mark="NO(${total_ep}/${num_episodes})"
                 all_complete=false
             fi
         else
-            complete_mark="NO(0/100)"
+            complete_mark="NO(0/${num_episodes})"
             all_complete=false
         fi
 
@@ -646,9 +730,9 @@ echo -e "\033[36mGenerating stats file: ${stats_file}\033[0m"
     fi
     printf "Summary: total %ds, success %d/%d, overall rate %s%%\n" "$total_duration" "$total_success" "$total_episodes" "$overall_rate"
     if $all_complete; then
-        echo "All tasks fully executed 100 episodes"
+        echo "All tasks fully executed ${num_episodes} episodes"
     else
-        echo "Warning: some tasks did not complete 100 episodes; check logs"
+        echo "Warning: some tasks did not complete ${num_episodes} episodes; check logs"
     fi
     echo "============================================"
 } | tee "$stats_file"

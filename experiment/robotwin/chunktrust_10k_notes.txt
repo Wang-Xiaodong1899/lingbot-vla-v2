@@ -1,0 +1,21 @@
+Run: bash experiment/robotwin/eval_chunktrust_10k.sh
+Defaults: all 50 existing RoboTwin tasks, 10 valid evaluation episodes/task,
+first demo_clean then demo_randomized, 4 GPUs, 2 servers/GPU, FP32, no video.
+The simulator retains the existing unseen language instruction protocol in both
+settings; clean/seen and randomized/unseen refer to environment domains.
+Checkpoint: weights/lingbotvla-robotwin-clean-sft/global_step_10000
+Normalizer: weights/lingbotvla-robotwin-clean-sft/robotwin_clean_norm.json
+Integrity: weights/lingbotvla-robotwin-clean-sft/global_step_10000.integrity.json
+Method: upstream ChunkTrust portable AHS, default AHSConfig, no QHA or training.
+Evidence uses all flow velocity steps and final actions in the same 14 active
+normalized coordinates, selected with action_joint_mask (padding excluded).
+AHS posterior resets each episode with the simulator episode seed. The client
+acknowledges actual executed target counts on the next observation. Unexecuted
+tails never enter continuity history. Horizon may be any rounded expected length
+from 10 through 50, using candidate evidence at 10/20/30/40/50.
+Logs contain CHUNKTRUST JSON records: replan index, selected k, history length,
+and candidate evidence q_mix. A server supports one synchronous environment.
+Override CHUNKTRUST_ROOT for the upstream repository location.
+Optional run controls: SETTINGS, NUM_TASKS, NUM_EPISODES, NUM_GPUS, START_PORT,
+OUTPUT_BASE, USE_COMPILE, NUM_PER_GPU, RESUME_CLEAN_FROM; additional arguments pass through to the launcher.
+Tests: python -m unittest discover -s tests -p test_chunktrust_runtime.py

@@ -1,0 +1,52 @@
+Checkpoint save investigation and manual restart (2026-10-15)
+
+Observed failure
+- Old run finished optimizer step 4000 at 09:59:49 local time.
+- Rank 0 exited with SIGKILL (-9) at 10:00:00 while writing DCP model shards.
+- Step 2000 and step 4000 use the same save implementation; there is no step4000-specific branch.
+- No CUDA OOM exception, no disk-full error, cgroup oom/oom_kill counters are zero.
+- The external source of SIGKILL is not established; host kernel logs are unavailable.
+- Resource pressure is a hypothesis, not a confirmed root cause. These changes cannot prevent an external kill.
+
+Confirmed implementation problems and changes
+- FileSystemWriter previously used 16 threads per rank and sync_files=False.
+  It now defaults to one thread per rank, with fsync enabled.
+- A formal global_step directory previously existed before the save completed.
+  Synchronous saves now use a hidden .incomplete staging directory, validate metadata
+  and every referenced shard byte range plus rank states, fsync, then atomically rename.
+  _SUCCESS.json denotes a complete distributed training-state checkpoint; HF export follows.
+- Optimizer-load exceptions were swallowed and invalid checkpoints could lead to
+  silently resetting training. Strict resume now rejects these failures.
+- With synchronous HF export, peers could enter their next step while rank 0 merged
+  model tensors. All ranks now wait for that export to finish.
+- StatefulDataLoader prefetch_factor reduced 4 -> 1 (8 workers retained to allow exact
+  old loader-state restoration). Global batch 768, micro batch 48, accumulation 4,
+  LR 1e-4 and original optimizer/scheduler configuration are retained.
+- Added per-phase checkpoint memory records and a 15-second cgroup resource monitor.
+
+Manual launch; no production training was launched during this fix
+  bash experiment/robotwin/train_clean_bs768_save500.sh
+  CHECK_ONLY=1 bash experiment/robotwin/train_clean_bs768_save500.sh
+
+Default resume source (complete training state, not just HF weights)
+  outputs/robotwin-clean-from4k-bs768/checkpoints/global_step_2000
+Default new output
+  outputs/robotwin-clean-from4k-bs768-resume2k-save1k
+Save interval: 500 optimizer steps; first new checkpoint step2500, then3000,3500,...
+A rerun selects the most recent validated checkpoint in the new output directory.
+The old partial step4000 remains unchanged for inspection.
+
+Validation
+- Isolated 4-GPU FSDP2 + CombinedOptimizer(Muon/AdamW) small-model test:
+  two consecutive saves; restore into a fresh optimizer; exact tensor and momentum
+  comparison; scheduler and rank-specific extra state restore; HF export.
+- Inject failure between model and optimizer save: no formal checkpoint published,
+  previous checkpoint still valid; incomplete checkpoints rejected.
+- 8-worker StatefulDataLoader prefetch4 -> prefetch1 resumes to the exact next batch.
+- Legacy full step2000 passes validation; partial step4000 is rejected.
+- CLI parsing, launcher CHECK_ONLY, bash syntax, Python compilation, diff whitespace checks.
+- These tests validate save/resume semantics; they do not reproduce the old full-scale
+  33-hour memory history or establish the source of the external SIGKILL.
+Test log: data/checkpoint_validation_interrupted_save.log
+Reproduce isolated GPU validation (choose a fresh output path):
+  PYTHONPATH="$PWD" OMP_NUM_THREADS=1 LINGBOT_DCP_THREADS=1 /root/miniconda3/envs/lingbotvla/bin/torchrun --standalone --nproc_per_node=4 tools/checkpoint_roundtrip_smoke.py data/checkpoint_validation_new

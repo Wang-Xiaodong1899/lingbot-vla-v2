@@ -96,7 +96,10 @@ class LeRobotDataset(BaseLeRobotDataset):
                 continue
             # Map absolute indices to relative indices if needed
             relative_indices = _to_relative_indices(self, q_idx)
-            result[key] = torch.stack(self.hf_dataset[relative_indices][key])
+            # Select before fetching rows: action chunks must not decode every
+            # camera image at every queried timestep.
+            column_dataset = self.hf_dataset.select_columns([key])
+            result[key] = torch.stack(column_dataset[relative_indices][key])
         return result
 
     def _query_videos(self, query_timestamps: dict[str, list[float]], ep_idx: int) -> dict[str, torch.Tensor]:

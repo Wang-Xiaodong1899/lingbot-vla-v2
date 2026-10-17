@@ -14,6 +14,10 @@
 
 
 import os
+import gc
+import json
+import time
+import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
@@ -23,6 +27,7 @@ from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner
 from ..utils.import_utils import is_torch_version_greater_than
 from ..utils.logging import get_logger
 from pathlib import Path
+from .integrity import validate_checkpoint, fsync_directory
 
 if is_torch_version_greater_than("2.4"):
     import torch.distributed.checkpoint as dcp
@@ -48,6 +53,24 @@ _MODEL_DIR = "model"
 _EMA_DIR = "ema"
 _OPTIMIZER_DIR = "optimizer"
 _EXTRA_STATE_DIR = "extra_state"
+
+
+def _checkpoint_phase(path, phase):
+    """Keep phase/memory evidence on disk even if a process is SIGKILLed."""
+    record = {'time': time.time(), 'rank': dist.get_rank(), 'phase': phase, 'checkpoint': str(path)}
+    for name in ('memory.current', 'memory.high', 'memory.max', 'memory.events'):
+        p = Path('/sys/fs/cgroup') / name
+        if p.exists():
+            record[name] = p.read_text().strip()
+    if torch.cuda.is_available():
+        record['cuda_allocated'] = torch.cuda.memory_allocated()
+        record['cuda_reserved'] = torch.cuda.memory_reserved()
+    root = Path(path).parent
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / f'checkpoint_memory_rank_{dist.get_rank()}.jsonl').open('a') as f:
+        f.write(json.dumps(record) + '\n')
+        f.flush()
+        os.fsync(f.fileno())
 
 
 class ModelState(Stateful):
@@ -281,6 +304,54 @@ class DistributedCheckpointer(CheckpointerBase):
 
     @classmethod
     def save(
+        cls, path: str, state: Dict[str, Any], global_steps: int = None, save_async=False,
+    ) -> None:
+        # Do not report completion for fire-and-forget asynchronous futures.
+        if save_async:
+            raise ValueError('Transactional DCP saving requires save_async=False')
+        final = Path(f'{path}/global_step_{global_steps}' if global_steps else path)
+        rank = dist.get_rank()
+        payload = [None]
+        if rank == 0:
+            payload[0] = {'error': f'Refusing to overwrite checkpoint: {final}'} if final.exists() else {
+                'staging': str(final.with_name(f'.{final.name}.incomplete-{uuid.uuid4().hex}'))}
+        dist.broadcast_object_list(payload, src=0)
+        if 'error' in payload[0]:
+            raise FileExistsError(payload[0]['error'])
+        staging = Path(payload[0]['staging'])
+        staging.mkdir(parents=True, exist_ok=True)
+        gc.collect()
+        cls._save_uncommitted(str(staging), state, global_steps=None, save_async=False)
+        dist.barrier()
+        result = [None]
+        if rank == 0:
+            try:
+                info = validate_checkpoint(staging, dist.get_world_size(), 'optimizer' in state, 'extra_state' in state)
+                # torch.save(extra_state) does not fsync on its own.
+                for p in (staging / _EXTRA_STATE_DIR).glob('*.pt'):
+                    with p.open('rb') as f:
+                        os.fsync(f.fileno())
+                for p in staging.iterdir():
+                    if p.is_dir():
+                        fsync_directory(p)
+                with (staging / '_SUCCESS.json').open('w') as f:
+                    json.dump({**info, 'global_step': global_steps, 'saved_at': time.time()}, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                fsync_directory(staging)
+                os.replace(staging, final)
+                fsync_directory(final.parent)
+                result[0] = {'ok': True}
+            except Exception as exc:
+                result[0] = {'error': repr(exc)}
+        dist.broadcast_object_list(result, src=0)
+        if 'error' in result[0]:
+            raise RuntimeError(f'Checkpoint not committed; original checkpoints preserved: {result[0]["error"]}')
+        dist.barrier()
+        logger.info_rank0(f'Committed complete checkpoint to {final}')
+
+    @classmethod
+    def _save_uncommitted(
         cls,
         path: str,
         state: Dict[str, Any],
@@ -311,9 +382,9 @@ class DistributedCheckpointer(CheckpointerBase):
                 state_dict={"state": ModelState(state["model"])},
                 storage_writer=FileSystemWriter(
                     model_dir,
-                    thread_count=16,
+                    thread_count=int(os.environ.get('LINGBOT_DCP_THREADS', '1')),
                     single_file_per_rank=True,
-                    sync_files=False,
+                    sync_files=True,
                 ),
             )
             if "ema" in state and state["ema"] is not None:
@@ -322,9 +393,9 @@ class DistributedCheckpointer(CheckpointerBase):
                     state_dict={"state": ModelState(state["ema"])},
                     storage_writer=FileSystemWriter(
                         ema_dir,
-                        thread_count=16,
+                        thread_count=int(os.environ.get('LINGBOT_DCP_THREADS', '1')),
                         single_file_per_rank=True,
-                        sync_files=False,
+                        sync_files=True,
                     ),
                 )
             if "optimizer" in state:
@@ -333,9 +404,9 @@ class DistributedCheckpointer(CheckpointerBase):
                     state_dict={"state": OptimizerState(model=state["model"], optimizer=state["optimizer"])},
                     storage_writer=FileSystemWriter(
                         optimizer_dir,
-                        thread_count=16,
+                        thread_count=int(os.environ.get('LINGBOT_DCP_THREADS', '1')),
                         single_file_per_rank=True,
-                        sync_files=False,
+                        sync_files=True,
                     ),
                 )
         else:
@@ -346,16 +417,19 @@ class DistributedCheckpointer(CheckpointerBase):
                     tmp_path.unlink()  # remove .metadata.tmp
                 return FileSystemWriter(
                     output_dir,
-                    thread_count=16,
+                    thread_count=int(os.environ.get('LINGBOT_DCP_THREADS', '1')),
                     single_file_per_rank=True,
-                    sync_files=False,
+                    sync_files=True,
                 )
             model_dir = os.path.join(checkpoint_dir, _MODEL_DIR)
             storage_writer = safe_create_writer(model_dir)
+            _checkpoint_phase(checkpoint_dir, 'model_start')
             dcp.save(
                 state_dict={"state": ModelState(state["model"])},
                 storage_writer=storage_writer,
             )
+            gc.collect()
+            _checkpoint_phase(checkpoint_dir, 'model_done')
             if "ema" in state and state["ema"] is not None:
                 ema_dir = os.path.join(checkpoint_dir, _EMA_DIR)
                 storage_writer = safe_create_writer(ema_dir)
@@ -365,15 +439,18 @@ class DistributedCheckpointer(CheckpointerBase):
                 )
             if "optimizer" in state:
                 optimizer_dir = os.path.join(checkpoint_dir, _OPTIMIZER_DIR)
+                _checkpoint_phase(checkpoint_dir, 'optimizer_start')
                 dcp.save(
                     state_dict={"state": OptimizerState(model=state["model"], optimizer=state["optimizer"])},
                     storage_writer=FileSystemWriter(
                         optimizer_dir,
-                        thread_count=16,
+                        thread_count=int(os.environ.get('LINGBOT_DCP_THREADS', '1')),
                         single_file_per_rank=True,
-                        sync_files=False,
+                        sync_files=True,
                     ),
                 )
+                gc.collect()
+                _checkpoint_phase(checkpoint_dir, 'optimizer_done')
                 # dist.barrier()
 
         if "extra_state" in state:
@@ -384,6 +461,7 @@ class DistributedCheckpointer(CheckpointerBase):
                 state["extra_state"],
                 extra_state_path,
             )
+            _checkpoint_phase(checkpoint_dir, 'extra_state_done')
 
         logger.info_rank0(f"Saved checkpoint to {checkpoint_dir}")
 
@@ -438,11 +516,13 @@ class DistributedCheckpointer(CheckpointerBase):
                 dcp.load(
                     state_dict={"state": OptimizerState(model=state["model"], optimizer=state["optimizer"])}, # 1043
                     storage_reader=FileSystemReader(optimizer_dir), # 1027
-                    planner = DefaultLoadPlanner(allow_partial_load=True),
+                    planner=DefaultLoadPlanner(allow_partial_load=allow_partial_load),
                     process_group=process_group,
                 )
-            except:
-                logger.info_rank0(f"Skip loading Optimizer from {checkpoint_dir}")
+            except Exception:
+                if not allow_partial_load:
+                    raise
+                logger.warning_rank0(f"Skip loading Optimizer from {checkpoint_dir} (partial load explicitly enabled)")
         else:
             model_dir = os.path.join(checkpoint_dir, _MODEL_DIR)
             dcp.load(
@@ -458,6 +538,7 @@ class DistributedCheckpointer(CheckpointerBase):
             extra_state_path = os.path.join(extra_state_dir, _EXTRA_STATE_FORMAT.format(dist.get_rank()))
             state["extra_state"] = torch.load(
                 extra_state_path,
+                weights_only=False,
             )
 
         logger.info_rank0(f"Loaded checkpoint from {checkpoint_dir}")
