@@ -2,6 +2,14 @@
 
 ## 2026-10-17
 
+### AutoHorizon 推理适配
+
+- 新增 Lingbot 10k 的 AutoHorizon 服务和 clean/randomized 评测启动脚本，沿用模型随附归一化文件。
+- 保留上游双向 soft-pointer 算法及 Apache-2.0 许可；按上游默认规则采集第 3 次去噪的动作注意力。
+- 兼容 Lingbot grouped-query attention、完整 key 归一化和动作 token 切片；通过独立只读采集保留原模型输出。
+- 采用 eager、关闭编译；新增上游一致性、注意力提取、状态重置测试和真实模型固定种子动作一致性验证工具。
+- 全部 12 个单元测试通过；真实 10k GPU 验证尚未完成，现有 action refiner 训练占用各卡约 67 GB，未启动完整 AutoHorizon 评测。
+
 ### RoboTwin 推理与评测
 
 - 新增 Lingbot VLA v2 的 ChunkTrust AHS 动态动作执行步长适配，无需训练 QHA。

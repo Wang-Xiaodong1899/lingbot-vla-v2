@@ -1,0 +1,54 @@
+AutoHorizon adaptation for Lingbot VLA v2 10k
+
+Upstream: https://github.com/hatchetproject/AutoHorizon
+Revision: c7504f1756109103f2cfcc2e23f1b1a23841c885
+Source: src/openpi/models_pytorch/pi0_pytorch.py
+The three soft-pointer functions are copied unchanged under Apache-2.0.
+License: docs/third_party/AutoHorizon.LICENSE
+
+Method
+- Frozen Lingbot checkpoint; no training, no AHS/QHA evidence or Beta memory.
+- Capture post-RoPE action-query attention at denoising step 3 (one-based),
+  matching the current upstream snapshot rule, not an average of the first 3.
+- Reconstruct full-key softmax using the same scaling, boolean mask, and grouped
+  query head replication as Lingbot eager attention. Slice the final 50 action
+  rows/columns only AFTER softmax, then mean over heads and all expert layers.
+- Apply upstream bidir_soft_pointer, hold_thr=0.3, max_entropy_q=0.9.
+- The model still uses its original attention output and unchanged sampler;
+  the collector only computes an additional read-only attention summary.
+- This implementation supports one synchronous environment per server and eager
+  uncompiled inference. It rejects --use_compile True. No transformers patches
+  from the upstream Pi0.5 repository are installed into the Lingbot environment.
+
+Checkpoint and normalization
+weights/lingbotvla-robotwin-clean-sft/global_step_10000
+weights/lingbotvla-robotwin-clean-sft/robotwin_clean_norm.json
+Keep the latter unchanged for both clean and randomized evaluation.
+
+Evaluation launcher (run once GPU memory is available)
+  bash experiment/robotwin/eval_autohorizon_10k.sh
+Default: 4 GPUs x 2 servers/GPU, 50 tasks x 10 episodes for demo_clean then
+ demo_randomized, FP32, no compile, no video, ports 9630-9637.
+For a single clean episode:
+  SETTINGS=demo_clean NUM_TASKS=1 NUM_EPISODES=1 NUM_GPUS=1 NUM_PER_GPU=1 bash experiment/robotwin/eval_autohorizon_10k.sh
+Output root: evaluation/results/autohorizon_10k/
+Logs: AUTOHORIZON JSON lines with execution_horizon, replan, attention step,
+layer count, selector, and forward/backward pointer diagnostics.
+Existing evaluator handles variable-length returned action prefixes directly.
+
+Standalone server options
+  python -m deploy.lingbot_vla_autohorizon_policy --model_path weights/lingbotvla-robotwin-clean-sft/global_step_10000 --use_compile False --port 9630
+Additional controls: --selector bidir|forward, --attention_step 3,
+--hold_threshold 0.3, --entropy_quantile 0.9, --robot_norm_path PATH.
+Use the existing QWEN3VL_PATH environment variable for local backbone assets.
+
+Validation
+- Unit tests cover selector parity against upstream, grouped-head attention,
+  preservation of the full softmax denominator, step-3 collection, reset,
+  unchanged wrapped velocity outputs, and rejection of invalid attention.
+- tests/test_autohorizon.py can run without the upstream repository; only the
+  direct upstream comparison is skipped when its checkout is absent.
+- tools/smoke_autohorizon.py performs real 10k fixed-seed exact action parity
+  and prefix slicing checks. This GPU smoke test has not been completed:
+  all 4 GPUs were occupied by existing action refiner training (~67GB/card).
+- No full AutoHorizon evaluation has been launched and no success rate is claimed.
