@@ -167,7 +167,9 @@ def main(usr_args):
 
     st_seed = 100000 * (1 + seed)
     suc_nums = []
-    test_num = 100
+    test_num = int(usr_args.get("num_episodes", 100))
+    if test_num <= 0:
+        raise ValueError("num_episodes must be positive")
     topk = 1
 
     # model = get_model(usr_args)

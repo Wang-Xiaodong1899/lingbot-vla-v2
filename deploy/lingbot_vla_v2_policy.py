@@ -273,7 +273,10 @@ class LingbotVLAv2Server:
         print(f"loading model from: {path_to_pi_model}")
         
         # load training config
-        training_config_path = Path(path_to_pi_model).parent.parent.parent/'lingbotvla_cli.yaml'
+        model_dir = Path(path_to_pi_model)
+        training_config_path = model_dir / 'lingbotvla_cli.yaml'
+        if not training_config_path.is_file():
+            training_config_path = model_dir.parent.parent.parent / 'lingbotvla_cli.yaml'
         with open(training_config_path, 'r') as f:
             training_config = yaml.safe_load(f)
         f.close()

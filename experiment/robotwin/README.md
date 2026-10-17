@@ -146,6 +146,9 @@ bash experiment/robotwin/start_robotwin_infer_and_eval.sh \
 ```
 
 Use `--task_config demo_randomized` for the randomized benchmark.
+The launcher defaults to `seen` instructions for `demo_clean` and `unseen` instructions
+for `demo_randomized`. Use `--instruction_type seen|unseen` (or `INSTRUCTION_TYPE`)
+to explicitly select the language split.
 
 **GPU / concurrency**
 - `num_gpus` × `num_per_gpu` = number of concurrent sim slots (one inference server per slot).
@@ -156,6 +159,7 @@ Use `--task_config demo_randomized` for the randomized benchmark.
 ### Smoke test (1 task, 1 GPU)
 
 Verify the pipeline end-to-end without waiting for the full run:
+Pass `--num_episodes 1` for a single-episode pipeline check; the default remains 100.
 
 ```bash
 QWEN3VL_PATH=/path/to/Qwen3-VL-4B-Instruct \
@@ -192,6 +196,8 @@ the full run.
 | `--use_length` | action-chunk length forwarded to the policy (default 50) |
 | `--robo_name` | robot config name (default `robotwin`) |
 | `--task_config` | RoboTwin setting: `demo_clean` or `demo_randomized` |
+| `--instruction_type` | Language split: defaults to `seen` for clean, `unseen` for randomized |
+| `--num_episodes` | Episodes per task (default `100`; use `1` for a quick pipeline check) |
 | `--use_bf16` / `--use_fp32` | inference precision; release reproduction uses `False` / `True` |
 | `--use_compile` | enable lazy `torch.compile` (default `True`; first request takes longer) |
 | `--inference_script` | inference-side module (default `deploy/lingbot_vla_v2_policy.py`) |

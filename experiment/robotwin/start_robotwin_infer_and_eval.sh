@@ -16,6 +16,7 @@
 #   --start_port        starting port (default: 9330)
 #   --pid_name          PID file prefix (default: test_pid)
 #   --num_tasks         number of sim tasks, taken in order from the task list (default: 50, max: 50)
+#   --num_episodes      number of episodes per task (default: 100)
 #   --num_gpus          total GPUs (default: 1)
 #   --num_per_gpu       inference servers per GPU (default: 1)
 #   --use_length        chunk length (default: 50)
@@ -26,6 +27,7 @@
 #   --use_fp32          use float32 inference (default: True; release reproduction setting)
 #   --use_compile       enable model compile in policy inference (default: True)
 #   --task_config       RoboTwin task config (default: demo_clean, or $TASK_CONFIG)
+#   --instruction_type  seen/unseen (default: seen for clean, unseen for randomized)
 #   --keep_inference    keep inference servers resident after simulation
 #
 # Examples:
@@ -49,6 +51,8 @@ conda_sh="${CONDA_SH:-/path/to/miniconda3/etc/profile.d/conda.sh}"
 start_port=9330
 pid_name="test_pid"
 num_tasks=50
+task_list_override=""
+num_episodes=100
 num_gpus=1
 num_per_gpu=1
 use_length=50
@@ -61,6 +65,7 @@ enable_video=True
 keep_inference=false
 enable_video=False
 task_config="${TASK_CONFIG:-demo_clean}"
+instruction_type="${INSTRUCTION_TYPE:-}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -72,6 +77,8 @@ while [[ $# -gt 0 ]]; do
         --start_port)        start_port="$2";        shift 2 ;;
         --pid_name)          pid_name="$2";          shift 2 ;;
         --num_tasks)         num_tasks="$2";         shift 2 ;;
+        --task_list)         task_list_override="$2"; shift 2 ;;
+        --num_episodes)      num_episodes="$2";      shift 2 ;;
         --num_gpus)          num_gpus="$2";          shift 2 ;;
         --num_per_gpu)       num_per_gpu="$2";       shift 2 ;;
         --use_length)        use_length="$2";        shift 2 ;;
@@ -80,6 +87,7 @@ while [[ $# -gt 0 ]]; do
         --use_compile)       use_compile="$2";     shift 2 ;;
         --robo_name)         robo_name="$2";         shift 2 ;;
         --task_config)       task_config="$2";       shift 2 ;;
+        --instruction_type)  instruction_type="$2";  shift 2 ;;
         --video_fps)         video_fps="$2";         shift 2 ;;
         --no_video)          enable_video=False;     shift ;;
         --keep_inference)    keep_inference=true;    shift ;;
@@ -99,6 +107,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --start_port        starting port (default: 9330)"
             echo "  --pid_name          PID file prefix (default: test_pid)"
             echo "  --num_tasks         number of sim tasks (default: 50, max: 50)"
+            echo "  --task_list         optional comma-separated task names; overrides --num_tasks"
+            echo "  --num_episodes      episodes per task (default: 100)"
             echo "  --num_gpus          total GPUs (default: 1)"
             echo "  --num_per_gpu       inference servers per GPU (default: 1)"
             echo "  --use_length        chunk length (default: 50)"
@@ -107,6 +117,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --use_compile       enable model compile (default: True)"
             echo "  --robo_name         robot config name (default: robotwin)"
             echo "  --task_config       RoboTwin task config (default: demo_clean)"
+            echo "  --instruction_type  seen/unseen (default: clean=seen, randomized=unseen)"
             echo "  --keep_inference    keep inference servers resident after simulation"
             echo "  --video_fps         video recording fps (default: 10)"
             echo "  --no_video          disable video recording to speed up simulation"
@@ -115,6 +126,22 @@ while [[ $# -gt 0 ]]; do
             echo -e "\033[31mUnknown argument: $1\033[0m"; exit 1 ;;
     esac
 done
+
+# Match the benchmark's language split to its visual split by default.
+if [ -z "$instruction_type" ]; then
+    case "$task_config" in
+        demo_clean) instruction_type=seen ;;
+        demo_randomized) instruction_type=unseen ;;
+        *) echo "Set --instruction_type seen or unseen for $task_config"; exit 1 ;;
+    esac
+fi
+if [[ "$instruction_type" != seen && "$instruction_type" != unseen ]]; then
+    echo "Invalid instruction type: $instruction_type (expected seen or unseen)"; exit 1
+fi
+echo "Evaluation instructions: $instruction_type (task config: $task_config)"
+if ! [[ "$num_episodes" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid episode count: $num_episodes (expected a positive integer)"; exit 1
+fi
 
 
 # ===== Common environment =====
@@ -150,7 +177,9 @@ cleanup() {
     done
     echo -e "\033[33m=== Cleanup done ===\033[0m"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 
 
@@ -204,6 +233,14 @@ train_config_name=0
 seed=0
 
 # ===== Compute inference slot count =====
+# Validate an explicit queue before calculating how many servers to start.
+if [ -n "$task_list_override" ]; then
+    IFS=',' read -r -a requested_tasks <<< "$task_list_override"
+    num_tasks=${#requested_tasks[@]}
+    if [ "$num_tasks" -eq 0 ] || [ "$num_tasks" -gt 50 ]; then
+        echo "Invalid --task_list length"; exit 1
+    fi
+fi
 # actual slots = min(num_tasks, num_gpus * num_per_gpu)
 # When tasks < max concurrency, spin up only as many servers as tasks to avoid
 # the waste of starting then shutting down extras.
@@ -218,9 +255,20 @@ task_list_all=("lift_pot" "hanging_mug" "stack_bowls_three" "scan_object" "hando
 
 # Build the sim task queue
 task_queue=()
-for i in $(seq 0 $((num_tasks-1))); do
-    task_queue+=("${task_list_all[$i]}")
-done
+if [ -n "$task_list_override" ]; then
+    declare -A requested_seen=()
+    for task in "${requested_tasks[@]}"; do
+        if [[ " ${task_list_all[*]} " != *" ${task} "* ]] || [ -n "${requested_seen[$task]:-}" ]; then
+            echo "Unknown or duplicate task: $task"; exit 1
+        fi
+        requested_seen[$task]=1
+        task_queue+=("$task")
+    done
+else
+    for i in $(seq 0 $((num_tasks-1))); do
+        task_queue+=("${task_list_all[$i]}")
+    done
+fi
 echo -e "\033[36mTasks this run (${num_tasks}): ${task_queue[*]}\033[0m"
 echo -e "\033[36mInference config: ${num_gpus} GPU x ${num_per_gpu} servers/GPU = ${num_slots} slots\033[0m"
 echo -e "\033[36mInference precision: use_bf16=${use_bf16}, use_fp32=${use_fp32}, use_compile=${use_compile}\033[0m"
@@ -229,8 +277,15 @@ echo -e "\033[36mInference precision: use_bf16=${use_bf16}, use_fp32=${use_fp32}
 batch_time=$(date +%Y%m%d_%H%M%S)
 # Extract experiment name and step from model_path (e.g. qwen35_robotwin_forward_no_mask_30k)
 _exp_name=$(echo "$model_path" | grep -oP '[^/]+(?=/checkpoints)')
+if [ -z "$_exp_name" ]; then
+    _exp_name=$(basename "${model_path%/}")
+fi
 _step_num=$(echo "$model_path" | grep -oP 'global_step_\K\d+')
-_step_k=$(( _step_num / 1000 ))k
+if [ -n "$_step_num" ]; then
+    _step_k=$(( _step_num / 1000 ))k
+else
+    _step_k=flat
+fi
 run_dir="${output_base}/${_exp_name}_${_step_k}_${task_config}_${batch_time}"
 mkdir -p "${run_dir}/inference_logs" "${run_dir}/eval_logs"
 log_dir="${run_dir}"
@@ -270,7 +325,7 @@ for slot in $(seq 0 $((num_slots-1))); do
         inference_script_for_module="${inference_script_for_module#${inference_workdir%/}/}"
     fi
     inference_module=$(echo "${inference_script_for_module}" | sed 's|/|.|g; s|\.py$||')
-    setsid bash -c "source ${conda_sh} && conda activate ${inference_env} && SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 python -m ${inference_module} \
+    setsid bash -c "source ${conda_sh} && conda activate ${inference_env} && PYTHONUNBUFFERED=1 SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 python -m ${inference_module} \
         --model_path '${model_path}' \
         --use_length '${use_length}' \
         --use_bf16 "${use_bf16}" \
@@ -409,6 +464,7 @@ launch_task() {
         echo "================================================================"
         echo "  [attempt ${attempt}/${max_retries}] $(date '+%Y-%m-%d %H:%M:%S')"
         echo "  task=${task_name}  slot=${slot}  gpu=${gpu_id}  port=${port}"
+        echo "  task_config=${task_config}  instruction_type=${instruction_type}"
         echo "================================================================"
     } >> "$log_file"
 
@@ -424,7 +480,9 @@ launch_task() {
     setsid bash -c "source ${conda_sh} && conda activate ${sim_env} && export PYTHONPATH=\"\$(python -c 'import site;print(site.getsitepackages()[0])')\${PYTHONPATH:+:\$PYTHONPATH}\" && PYTHONUNBUFFERED=1 PYTHONWARNINGS=ignore::UserWarning XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 python -u ${eval_client_dst} --config policy/${policy_name}/deploy_policy.yml \
         --overrides \
         --task_name ${task_name} \
+        --num_episodes ${num_episodes} \
         --task_config ${task_config} \
+        --instruction_type ${instruction_type} \
         --train_config_name ${train_config_name} \
         --seed ${seed} \
         --policy_name ${policy_name} \
@@ -455,7 +513,7 @@ shutdown_inference_slot() {
     local slot=$1
     local inf_pid=${inference_pids[$slot]}
     if [ "$inf_pid" != "0" ] && kill -0 "$inf_pid" 2>/dev/null; then
-        kill "$inf_pid" 2>/dev/null
+        kill -TERM -- -"$inf_pid" 2>/dev/null || kill "$inf_pid" 2>/dev/null
         echo -e "\033[36m  [release] slot $slot inference server (PID: ${inf_pid}) stopped, remaining: $((active_inference - 1))\033[0m"
     fi
     inference_pids[$slot]=0
@@ -585,12 +643,14 @@ echo -e "\033[36mGenerating stats file: ${stats_file}\033[0m"
     echo "  Model path: ${model_path}"
     echo "  Tasks: ${num_tasks}"
     echo "  Task Config: ${task_config}"
+    echo "  Instruction Type: ${instruction_type}"
+    echo "  Episodes per task: ${num_episodes}"
     echo "  Inference: ${num_gpus} GPU x ${num_per_gpu}/GPU = ${num_slots} slots"
     echo "  Precision: use_bf16=${use_bf16}, use_fp32=${use_fp32}, use_compile=${use_compile}"
     echo "  Result: ${completed} done, ${skipped} skipped"
     echo "============================================"
     echo ""
-    printf "%-30s %-10s %-12s %-10s %-10s\n" "Task" "Time(s)" "Done(100)" "Success/Total" "Rate"
+    printf "%-30s %-10s %-12s %-10s %-10s\n" "Task" "Time(s)" "Done(${num_episodes})" "Success/Total" "Rate"
     echo "--------------------------------------------------------------------------------"
 
     total_success=0
@@ -621,17 +681,17 @@ echo -e "\033[36mGenerating stats file: ${stats_file}\033[0m"
             fi
         fi
 
-        # Check whether all 100 episodes ran
+        # Check whether the requested number of episodes ran.
         if [ "$episodes_done" != "-" ]; then
             total_ep=$(echo "$episodes_done" | cut -d'/' -f2)
-            if [ "$total_ep" = "100" ]; then
+            if [ "$total_ep" = "$num_episodes" ]; then
                 complete_mark="YES"
             else
-                complete_mark="NO(${total_ep}/100)"
+                complete_mark="NO(${total_ep}/${num_episodes})"
                 all_complete=false
             fi
         else
-            complete_mark="NO(0/100)"
+            complete_mark="NO(0/${num_episodes})"
             all_complete=false
         fi
 
@@ -646,9 +706,9 @@ echo -e "\033[36mGenerating stats file: ${stats_file}\033[0m"
     fi
     printf "Summary: total %ds, success %d/%d, overall rate %s%%\n" "$total_duration" "$total_success" "$total_episodes" "$overall_rate"
     if $all_complete; then
-        echo "All tasks fully executed 100 episodes"
+        echo "All tasks fully executed ${num_episodes} episodes"
     else
-        echo "Warning: some tasks did not complete 100 episodes; check logs"
+        echo "Warning: some tasks did not complete ${num_episodes} episodes; check logs"
     fi
     echo "============================================"
 } | tee "$stats_file"
