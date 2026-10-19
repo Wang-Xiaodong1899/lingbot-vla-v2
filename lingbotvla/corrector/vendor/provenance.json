@@ -1,0 +1,16 @@
+{
+  "repository": "/root/autodl-tmp/projects/vla-corrector",
+  "commit": "e02ab51f030d1e25c1ca1b5642667730d2e495d3",
+  "copied_files": [
+    "src/siglip_dynamics/MLP.py",
+    "src/siglip_dynamics/config.py"
+  ],
+  "threshold_source": "src/lerobot/scripts/lerobot_eval_modified_detection.py",
+  "adaptations": [
+    "Qwen3-VL spatial visual tokens instead of SigLIP",
+    "Lingbot normalized absolute actions, 55-dimensional with masks",
+    "episode-separated 10-step residual targets",
+    "single-action synchronous WebSocket execution and server-side action cache",
+    "velocity-only OGG via predict_velocity wrapper"
+  ]
+}

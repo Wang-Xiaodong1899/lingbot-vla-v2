@@ -1,0 +1,70 @@
+Lingbot-VLA-V2 10k + VLA-Corrector
+
+Reference: /root/autodl-tmp/projects/vla-corrector (commit in lingbotvla/corrector/vendor/provenance.json)
+Base: /root/autodl-fs/lingbotvla-robotwin-clean-sft/global_step_10000
+Normalization: the base checkpoint's robotwin_clean_norm.json; no new normalization statistics.
+The base policy and its visual encoder are frozen. Only the external 44,620,288-parameter MLP is trained.
+This is separate from the earlier candidate-action flow refiner.
+
+Adaptation:
+- Full Qwen3-VL merged image tokens, 3 fixed cameras x 64 spatial tokens x 2560 dimensions.
+- Native normalized absolute 55-dimensional Lingbot actions, padded dimensions masked to zero.
+- Learn delta_z = z[t+10] - z[t] using action[t], without crossing episode boundaries.
+- Reference residual MLP architecture, width2048 x4, action embedding256, dropout0.
+- MSE + flattened cosine loss, AdamW lr1e-4 / weight decay1e-4, gradient clip1.
+- FP32 extraction, training and inference; no compilation.
+- Training: GPUs1,2,3; per-GPU batch128, global384; up to30 epochs, patience5.
+- Episode-disjoint split: 45 train +5 validation per task (2250/250 episodes), seed42.
+- Each500 optimizer steps saves snapshots/stepN.pt independently. latest.pt also saved each epoch.
+- best.pt selected by validation MSE+cosine. Saves include optimizer, scheduler, RNG by rank, next epoch/batch, data/base/norm metadata.
+- Caches use reference-style per-token int8 quantization plus fp16 scales; about252 GiB for all549787 frames.
+
+Online integration:
+- Server caches a 50-action plan but returns exactly ONE action per request, so new observations arrive after every executed action.
+- Pending dynamics predictions align at exactly10 executed steps. Zero-motion residuals do not trigger a cosine detector.
+- Reference robust EWMA/median/MAD threshold state machine; cooldown10; defaults recorded in monitor.py.
+- Trigger discards stale plan and guides only the recovery sampling call.
+- Same OGG objective as reference: attract predicted dynamics to predicted_delta - observed_delta.
+- Velocity-only gradients through the frozen MLP; no base parameter gradients. eta0.1, every3 sampler steps, gradient norm capped at1.
+- Online image preprocessing is matched exactly to the offline embedded-PNG pipeline.
+- These are Lingbot adaptations, not a claim to reproduce published benchmark results.
+
+Full pipeline (ALREADY RUNNING; do not start a duplicate):
+  CUDA_VISIBLE_DEVICES=1,2,3 bash experiment/robotwin/train_vla_corrector_10k.sh
+The script resumes an existing latest.pt automatically and reuses completed episode feature caches.
+On a fresh optimizer branch with changed batch/world/schedule, choose a new OUTPUT_DIR; strict resume rejects incompatible metadata.
+
+Watch:
+  tail -f outputs/vla-corrector-base10k/pipeline.log
+  cat outputs/vla-corrector-base10k/pipeline_status.json
+  tail -f outputs/vla-corrector-base10k/train.log
+Outputs: outputs/vla-corrector-base10k/train/{best.pt,latest.pt,snapshots/step500.pt,...}
+Feature cache: data/corrector_features_10k/
+
+After training the pipeline automatically runs a real base+OGG check, then waits for GPUs0,1,2,3 each to have >=75000 MiB free.
+It runs one task x1 episode smoke, then clean/seen and randomized/unseen, 50 tasks x10 episodes each (1000 formal episodes).
+No existing job is stopped. One server/simulator slot per GPU; no video.
+Final task counts, instruction type and result consistency are validated, not inferred from launcher exit alone.
+Evaluation uses a launcher snapshot and a distinct client filename to avoid altering concurrent experiments.
+
+Standalone evaluation (after best.pt exists; do not duplicate an active driver):
+  /root/miniconda3/envs/lingbotvla/bin/python experiment/robotwin/eval_vla_corrector_10k.py --checkpoint outputs/vla-corrector-base10k/train/best.pt
+Results/status: evaluation/results/vla_corrector_10k/
+
+Checks already performed are stored under outputs/vla-corrector-base10k/:
+- Real two-episode feature extraction.
+- Full MLP batch128 GPU forward/backward/update; peak allocated about5.7 GiB.
+- Three-GPU real-cache save/resume vs continuous training, maximum absolute weight difference7.45e-9.
+- Real offline/online preprocessing exactly equal.
+- Unit tests for episode boundaries, quantization, stationary motion, thresholds, velocity masking, no parameter gradients and exception cleanup.
+Full real OGG and simulator smoke execute automatically after trained weights become available; benchmark performance remains unmeasured until completion.
+
+Extraction changed to GPU0,1,2,3 with EXTRACT_CUDA_VISIBLE_DEVICES=0,1,2,3. Completed305 episodes /68672 frames reused. Training still uses GPU1,2,3, per-GPU128/global384.
+
+Extraction batch increased from16 to128 per GPU on GPU0,1,2,3. Completed330 episodes preserved; short episodes can have smaller actual batches. First-batch peak GPU allocation is logged as extraction_batch_verified.
+
+Extraction batch increased128 ->512 per GPU on GPU0,1,2,3; actual batch capped by episode length. Training settings unchanged.
+
+Extraction batch512 ->1024 per GPU; all completed episode caches reused; actual batch capped by episode length.
+
+Continuous monitor tools/monitor_corrector_handoff.py checks every30s and writes monitor_status.json. Extraction continues uninterrupted; old three-GPU shell controller is paused. After complete cache and extraction process exit, validates all10000 arrays, retires old controller and directly starts four-GPU training (per-GPU128/global512) with SKIP_EXTRACTION=1. Monitor stays active through training and evaluation. PID in monitor.pid; logs in monitor.log.

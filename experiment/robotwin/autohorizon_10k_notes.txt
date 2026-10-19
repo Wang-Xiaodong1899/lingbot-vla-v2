@@ -48,7 +48,11 @@ Validation
   unchanged wrapped velocity outputs, and rejection of invalid attention.
 - tests/test_autohorizon.py can run without the upstream repository; only the
   direct upstream comparison is skipped when its checkout is absent.
-- tools/smoke_autohorizon.py performs real 10k fixed-seed exact action parity
-  and prefix slicing checks. This GPU smoke test has not been completed:
-  all 4 GPUs were occupied by existing action refiner training (~67GB/card).
-- No full AutoHorizon evaluation has been launched and no success rate is claimed.
+- Real 10k smoke validation passed: bitwise action parity with attention
+  collection on the existing reference MoE backend, 36 layers captured, and
+  exact prefix slicing against the same production inference realization.
+- Production robby_moe uses atomic accumulation and has small repeat jitter
+  even without the collector. The smoke test measures this separately; the
+  evaluation keeps the original production MoE backend.
+- Full clean/randomized evaluation launched on 2026-10-17 with 8 slots.
+  Results are pending; no success rate is claimed.

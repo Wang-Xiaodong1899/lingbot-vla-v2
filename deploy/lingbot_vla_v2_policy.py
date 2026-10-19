@@ -336,7 +336,24 @@ class LingbotVLAv2Server:
             self.sample_actions_fn = torch.compile(self.vla.model.sample_actions)
 
         if self.robot_norm_path is None:
-            self.robot_norm_path = data_config.norm_stats_file
+            configured_norm = Path(data_config.norm_stats_file)
+            if configured_norm.is_file():
+                self.robot_norm_path = str(configured_norm)
+            else:
+                # HF releases retain the training machine's absolute path.
+                # Resolve the same named sidecar next to the downloaded model.
+                norm_candidates = [Path(path_to_pi_model).resolve(),
+                                   *Path(path_to_pi_model).resolve().parents]
+                local_norm = next((p / configured_norm.name for p in norm_candidates
+                                   if (p / configured_norm.name).is_file()), None)
+                if local_norm is None:
+                    raise FileNotFoundError(
+                        f'Normalization file {configured_norm} is unavailable; '
+                        'provide --robot_norm_path or download the matching sidecar')
+                self.robot_norm_path = str(local_norm)
+        if not Path(self.robot_norm_path).is_file():
+            raise FileNotFoundError(f'Normalization file missing: {self.robot_norm_path}')
+        print(f'Using normalization stats: {self.robot_norm_path}', flush=True)
 
         print('Model initialized ... ')
 
@@ -556,6 +573,7 @@ def main():
         "--model_path",
         type=str,
     )
+    parser.add_argument('--robot_norm_path', type=str, default=None)
 
     parser.add_argument(
         "--use_length",
@@ -600,6 +618,7 @@ def main():
 
     model = LingbotVLAv2Server(
         args.model_path,
+        robot_norm_path=args.robot_norm_path,
         use_length=args.use_length,
         chunk_ret=args.chunk_ret,
         use_bf16=args.use_bf16,
