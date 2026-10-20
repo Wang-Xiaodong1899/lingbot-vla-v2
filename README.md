@@ -272,3 +272,32 @@ This project is licensed under the [Apache-2.0 License](LICENSE).
 ## Acknowledgement
 
 We sincerely thank the developers of [VeOmni](https://arxiv.org/abs/2508.02317) and [LeRobot](https://github.com/huggingface/lerobot). This project benefits from their contributions to the open-source community. We also thank the [TorchTitan](https://github.com/pytorch/torchtitan) team for their Distributed Muon implementations, which our Distributed Muon integration is based on.
+
+## 可选 B 数据增广
+
+参考本地 `lingbot-vla` 仓库的 `B-aug1-2k-works`（patch 0001/0002），
+在任意训练命令前设置 `LINGBOT_B_AUG=1`，即可同时启用 level 1 视觉增广和
+归一化状态空间中标准差为 0.01 的高斯噪声。例如：
+
+```bash
+LINGBOT_B_AUG=1 bash train.sh tasks/vla/train_lingbotvla.py ./configs/vla/robotwin/robotwin.yaml
+```
+
+上述配置路径需替换为实际训练配置；也可在现有训练启动脚本前设置相同环境变量。
+默认 `LINGBOT_B_AUG=0`，不添加 B 增广，原有颜色增广是否执行仍由训练配置的
+`data.image_augment` 决定。启用 B 或显式设置正数 `LINGBOT_AUG_LEVEL` 会开启训练图像增广，
+即使原配置的 `image_augment: false`。
+支持独立覆盖：`LINGBOT_AUG_LEVEL=0/1/2` 和 `LINGBOT_STATE_NOISE_STD=0.01`；
+显式独立参数优先于总开关。要强制关闭额外增广，设置
+`LINGBOT_AUG_LEVEL=0 LINGBOT_STATE_NOISE_STD=0`。
+
+B level 1 在原有颜色增广之上添加色相变化（±0.05 周期）、RGB 通道增益（±6%）、
+头部视角缩放（±8%）/平移（±5%）/旋转（±2°）、腕部视角缩放（±3%）/平移（±2%），
+40% 概率的单个纯色遮挡块（面积 1%–6%），以及标准差 0–0.02 的图像高斯噪声。
+几何参数按样本和视角固定，当前帧与未来帧共享；像素噪声每次独立生成。
+状态噪声在动作相对化、归一化后、填充前添加，仅改变状态输入，不改变动作标签。
+视觉增广仅在训练图像处理路径执行；`policy_eval=True` 时不添加状态噪声。
+这些操作在线执行，不改写数据集，也无需预生成数据。
+
+本次仅迁移 B 的视觉增广和状态噪声，不改变数据采样、指令采样、优化器或训练步数；
+不引入 level 3、EMA 或蒸馏改动。参考实验的收益尚未在本仓库重新验证。

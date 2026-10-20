@@ -1,3 +1,5 @@
+import os
+import zlib
 from typing import Dict
 from pathlib import Path
 
@@ -223,21 +225,116 @@ def _visual_hw(visual: Tensor) -> tuple[int, int]:
     raise ValueError(f"Expected image (C,H,W) or video (T,C,H,W), got {tuple(visual.shape)}")
 
 
+# ---------------------------------------------------------------------------
+# Extended training-time visual augmentation (clean demonstrations only).
+# LINGBOT_B_AUG=1 defaults to level 1; LINGBOT_AUG_LEVEL overrides it (0/1/2).
+# Only 2D image operations on existing frames; nothing is re-rendered and no new data is generated.
+# All random geometry is derived from a per-sample seed (+ a per-view hash), so the current frame, the
+# future frame(s) and every frame of a clip of the same view receive identical geometric parameters.
+# ---------------------------------------------------------------------------
+_AUG_LEVELS = {
+    #        hue    gain   (scale, trans, rot_deg) head    (scale, trans, rot_deg) wrist   erase_p  erase_max  erase_area       noise
+    1: dict(hue=0.05, gain=0.06, head=(0.08, 0.05, 2.0), wrist=(0.03, 0.02, 0.0), erase_p=0.4, erase_max=1, erase_area=(0.01, 0.06), noise=0.02),
+    2: dict(hue=0.08, gain=0.10, head=(0.12, 0.08, 4.0), wrist=(0.05, 0.03, 1.0), erase_p=0.6, erase_max=2, erase_area=(0.02, 0.10), noise=0.04),
+}
+_HEAD_HINTS = ("top", "high", "head")
+
+
+def get_visual_aug_level() -> int:
+    default = "1" if os.environ.get("LINGBOT_B_AUG", "0") == "1" else "0"
+    try:
+        return int(os.environ.get("LINGBOT_AUG_LEVEL", default))
+    except ValueError:
+        return 0
+
+
+def _view_generator(params: dict, view_key) -> torch.Generator:
+    g = torch.Generator()
+    base = int(params["seed"])
+    g.manual_seed((base + zlib.crc32(str(view_key).encode("utf-8"))) & 0x7FFFFFFF)
+    return g
+
+
+def _urand(g: torch.Generator, lo: float, hi: float) -> float:
+    return float(lo + (hi - lo) * torch.rand((), generator=g))
+
+
+_YIQ = torch.tensor([[0.299, 0.587, 0.114], [0.596, -0.274, -0.322], [0.211, -0.523, 0.312]])
+
+
+def _hue_matrix(theta: float) -> Tensor:
+    c, s = math.cos(theta), math.sin(theta)
+    rot = torch.tensor([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
+    return torch.linalg.inv(_YIQ) @ rot @ _YIQ
+
+
+def extended_visual_augmentation(image: Tensor, params: dict, view_key, level: int) -> Tensor:
+    """image: (T,C,H,W) float32 in [0,1]; returns same shape, clamped to [0,1]."""
+    cfg = _AUG_LEVELS.get(level)
+    if cfg is None or "seed" not in params:
+        return image
+    g = _view_generator(params, view_key)
+    n_t, _, height, width = image.shape
+    is_head = view_key is None or any(h in str(view_key) for h in _HEAD_HINTS)
+
+    # 1) hue rotation + per-channel gain (lighting colour shifts)
+    theta = _urand(g, -cfg["hue"], cfg["hue"]) * 2.0 * math.pi
+    gains = torch.tensor([_urand(g, 1.0 - cfg["gain"], 1.0 + cfg["gain"]) for _ in range(3)])
+    mat = _hue_matrix(theta).to(image.dtype) * gains.to(image.dtype).view(3, 1)
+    image = torch.einsum("ij,tjhw->tihw", mat.to(image.device), image)
+
+    # 2) small scale / translation / rotation (camera distance, table height, mounting jitter)
+    s_amp, t_amp, r_deg = cfg["head"] if is_head else cfg["wrist"]
+    zoom = 1.0 + _urand(g, -s_amp, s_amp)
+    tx, ty = _urand(g, -t_amp, t_amp) * 2.0, _urand(g, -t_amp, t_amp) * 2.0
+    rot = math.radians(_urand(g, -r_deg, r_deg)) if r_deg > 0 else 0.0
+    inv = 1.0 / zoom
+    cos_r, sin_r = math.cos(rot), math.sin(rot)
+    theta_aff = torch.tensor([[inv * cos_r, -inv * sin_r, tx], [inv * sin_r, inv * cos_r, ty]], dtype=image.dtype)
+    theta_aff = theta_aff.unsqueeze(0).expand(n_t, 2, 3).to(image.device)
+    grid = F.affine_grid(theta_aff, list(image.shape), align_corners=False)
+    image = F.grid_sample(image, grid, mode="bilinear", padding_mode="border", align_corners=False)
+
+    # 3) random erasing with solid colour boxes (distractor-like occlusion)
+    n_boxes = 0
+    if _urand(g, 0.0, 1.0) < cfg["erase_p"]:
+        n_boxes = 1 + int(_urand(g, 0.0, float(cfg["erase_max"])) % cfg["erase_max"])
+    for _ in range(n_boxes):
+        area = _urand(g, *cfg["erase_area"]) * height * width
+        aspect = math.exp(_urand(g, math.log(0.4), math.log(2.5)))
+        bh = int(min(height, max(2, round(math.sqrt(area / aspect)))))
+        bw = int(min(width, max(2, round(math.sqrt(area * aspect)))))
+        y0 = int(_urand(g, 0.0, float(height - bh)))
+        x0 = int(_urand(g, 0.0, float(width - bw)))
+        colour = torch.tensor([_urand(g, 0.0, 1.0) for _ in range(3)], dtype=image.dtype).view(1, 3, 1, 1)
+        image[:, :, y0:y0 + bh, x0:x0 + bw] = colour.to(image.device)
+
+    # 4) mild gaussian sensor noise (fresh noise per call; strength is sample-seeded)
+    sigma = _urand(g, 0.0, cfg["noise"])
+    if sigma > 0:
+        image = image + torch.randn_like(image) * sigma
+    return image.clamp(0.0, 1.0)
+
+
 def sample_visual_augmentation_params(
     reference: Tensor,
 ) -> dict:
     """Sample one replayable augmentation config for all views/frames in a sample."""
     _visual_hw(reference)
     device = reference.device
-    return {
+    params = {
         "brightness": 0.7 + torch.rand((), device=device) * 0.6,
         "contrast": 0.6 + torch.rand((), device=device) * 0.8,
         "saturation": 0.5 + torch.rand((), device=device),
     }
+    if get_visual_aug_level() > 0:
+        params["seed"] = torch.randint(0, 2**31 - 1, (), device=device)
+    return params
 
 def apply_visual_augmentation(
     visual: Tensor,
     params: dict,
+    view_key=None,
 ) -> Tensor:
     """Apply the same sampled crop/rotate/color params to an image or video clip.
 
@@ -269,6 +366,10 @@ def apply_visual_augmentation(
     gray = image.mean(dim=1, keepdim=True)
     image = gray + (image - gray) * saturation
     image = image.clamp(0.0, 1.0)
+
+    level = get_visual_aug_level()
+    if level > 0 and "seed" in params:
+        image = extended_visual_augmentation(image, params, view_key, level)
 
     if orig_dtype == torch.uint8:
         image = (image * 255.0).round().to(torch.uint8)
@@ -322,6 +423,7 @@ def prepare_images(
             img = apply_visual_augmentation(
                 img,
                 augment_params,
+                view_key=key,
             )
 
         if use_depth_align:

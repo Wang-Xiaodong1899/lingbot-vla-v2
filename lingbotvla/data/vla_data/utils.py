@@ -11,7 +11,7 @@ import ast
 import torch.nn.functional as F
 
 from ...utils import logging as logging_utils
-from .transform import Normalizer, prepare_images, prepare_state, prepare_language, prepare_action, expert_visual_transform
+from .transform import Normalizer, prepare_images, prepare_state, prepare_language, prepare_action, expert_visual_transform, get_visual_aug_level
 from .ee_pose_transform import *
 from typing import Dict, List, Optional
 import ast
@@ -109,7 +109,7 @@ class FeatureTransform:
         self.use_future_image = use_future_image
 
         if not disabled_image_features:
-            self.image_augment = image_augment
+            self.image_augment = image_augment or get_visual_aug_level() > 0
         
         # keep the self.feature_to_keep in lerobot item when convert to new item
         self.feature_to_keep = set([
@@ -399,6 +399,14 @@ class FeatureTransform:
 
         if self.normalizer is not None:
             item = self.normalizer.normalize(item)
+            # Training-time robot-state perturbation (allowed: "robot state perturbation"). Gaussian noise in the
+            # normalised state space; actions are untouched. Off by default (LINGBOT_STATE_NOISE_STD=0).
+            default_noise = "0.01" if os.environ.get("LINGBOT_B_AUG", "0") == "1" else "0"
+            state_noise_std = float(os.environ.get("LINGBOT_STATE_NOISE_STD", default_noise) or 0)
+            if state_noise_std > 0 and w_action:
+                for state_feature in self.states:
+                    if state_feature in item and isinstance(item[state_feature], torch.Tensor):
+                        item[state_feature] = item[state_feature] + torch.randn_like(item[state_feature]) * state_noise_std
 
         if self.return_item_befor_padding:
             return item
