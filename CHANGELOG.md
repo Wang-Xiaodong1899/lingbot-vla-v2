@@ -1,5 +1,17 @@
 # 修改日志
 
+## 2026-10-22
+
+### 官方 RoboTwin v3 数据的 aug1 / Muon 续训准备
+
+- 新增 `experiment/robotwin/train_z3a_official_from20k.sh` 和 `tools/prepare_z3a_official.py`，从 `hggforget/lingbotvla-robotwin-clean-sft/global_step_20000` 初始化，使用官方 `RoboTwin_lerobot_v30` 数据和模型随附的归一化统计、机器人关节映射。
+- 使用原生 Muon，关闭额外 MoE 专家学习率倍率；启用 level 1 视觉增广及 `0.01` 归一化状态噪声，保留深度/DINO 辅助损失，关闭 PICA。默认学习率 `1e-4 → 5e-5`、cosine、无 warmup。
+- 默认每卡 micro batch 64，按可见 GPU 数自动计算梯度累积，global batch 固定为 1024；本机双卡为 `2 × 64 × 8 = 1024`。启用 FSDP 全分片与梯度检查点，默认新增训练 1000 个优化器更新，每 100 步保存。初始目录不含优化器状态，首次运行新建 Muon 状态，从本轮 step 0 开始。
+- 启动脚本提供 `DRY_RUN=1` 和 `CHECK_ONLY=1`，检查 batch 整除关系、数据完整性、权重和运行依赖；支持 `.zip.part` 下载完成后的 SHA-256 校验及解压，不读取未完成的数据。
+- 新增 `tools/download_z3a_assets.py`，固定官方仓库 revision，支持辅助权重断点续传和哈希校验。本机已补齐 MoGe、LingBot-Depth、DINO-VIDEO 权重及指定版本的 `utils3d` 依赖；三个辅助权重和初始 20k 模型的 6 个分片均通过 SHA-256 校验，DINO 配置通过 Git blob 哈希校验。
+- 原生训练器配置解析、增广测试、真实数据单样本读取、三个辅助模型实际加载及完整启动预检查均通过；数据共 2500 episodes、548893 frames。配置快照、校验清单和检查日志归档到 [`experiment/robotwin/records/z3a_official_from20k_20261022/`](experiment/robotwin/records/z3a_official_from20k_20261022/)，模型和数据二进制保留在本地。
+- 当前为本地适配版：缓存的 `Auranj/lingbot-vla` 分支版本 `ffbf35b` 不含 `Z3a-official-data-aug1` 配置，拉取更新时遇到认证限制，尚未核对上游 Z3a 的完整设置；直接使用发布数据中的指令，未应用实验仓库的 seen 指令替换流程。尚未启动正式训练、实测 batch 64 的训练显存或评估训练效果。
+
 ## 2026-10-21
 
 ### PICA-WAM 训练方法适配 LingBot-VLA-V2
