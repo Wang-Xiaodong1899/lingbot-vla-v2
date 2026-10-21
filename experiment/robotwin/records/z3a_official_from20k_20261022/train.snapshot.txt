@@ -1,0 +1,1 @@
+robotwin_clean /root/autodl-tmp/projects/lingbot-vla-v2/data/RoboTwin_lerobot_v30

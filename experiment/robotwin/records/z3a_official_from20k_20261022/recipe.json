@@ -1,0 +1,10 @@
+{
+  "recipe": "local official-data aug1 adaptation; exact upstream Z3a unverified",
+  "initial_checkpoint": "/root/autodl-tmp/models/hggforget-lingbotvla-robotwin-clean-sft/global_step_20000",
+  "dataset": "/root/autodl-tmp/projects/lingbot-vla-v2/data/RoboTwin_lerobot_v30",
+  "optimizer": "muon",
+  "global_batch_size": 1024,
+  "augmentation_level": 1,
+  "state_noise_std": 0.01,
+  "initial_optimizer_state": "not supplied; new Muon state, training steps start at 0"
+}

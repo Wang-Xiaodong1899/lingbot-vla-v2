@@ -1,0 +1,10 @@
+level0 identical to reference: True
+level1 shape/dtype ok: True mean abs diff vs input: 44.5
+level1 same view -> same geometry: True (204.7801513671875, 307.24267578125) (204.7801513671875, 307.24267578125)
+level1 different view geometry differs: True (215.0, 326.0)
+level1 clip frames share geometry: True
+level2 shape/dtype ok: True mean abs diff vs input: 49.9
+level2 same view -> same geometry: True (196.36050415039062, 300.85040283203125) (196.3328399658203, 300.8362121582031)
+level2 different view geometry differs: True (213.35833740234375, 329.0897521972656)
+level2 clip frames share geometry: True
+ALL OK

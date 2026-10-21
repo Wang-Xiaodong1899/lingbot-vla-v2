@@ -1,0 +1,108 @@
+{
+  "repo": "hggforget/lingbotvla-robotwin-clean-sft",
+  "revision": "8a2832794253919cddb29b93920d3bc109ce3123",
+  "files": [
+    {
+      "name": "added_tokens.json",
+      "size": 707,
+      "sha256": null,
+      "verified": true
+    },
+    {
+      "name": "chat_template.jinja",
+      "size": 5292,
+      "sha256": null,
+      "verified": true
+    },
+    {
+      "name": "config.json",
+      "size": 4401,
+      "sha256": null,
+      "verified": true
+    },
+    {
+      "name": "merges.txt",
+      "size": 1671853,
+      "sha256": null,
+      "verified": true
+    },
+    {
+      "name": "model-00001-of-00006.safetensors",
+      "size": 4947507248,
+      "sha256": "15e268c052a80134773fed81010b951e8249885da8c58acf027b217dbb6cd353",
+      "verified": true
+    },
+    {
+      "name": "model-00002-of-00006.safetensors",
+      "size": 4944315304,
+      "sha256": "57d7449106af536bbf70e1b5f44af98b126aa937e376696342c6d26f3d12b097",
+      "verified": true
+    },
+    {
+      "name": "model-00003-of-00006.safetensors",
+      "size": 4944315360,
+      "sha256": "ce1ece7e201c6dc7faea4d0a6f673da7cac885c5bfb4871b7512e52db368362c",
+      "verified": true
+    },
+    {
+      "name": "model-00004-of-00006.safetensors",
+      "size": 4992858968,
+      "sha256": "566a3700e6d61840639e85dadaf57be125bfe0d9ab1ca8ba7658148305201e90",
+      "verified": true
+    },
+    {
+      "name": "model-00005-of-00006.safetensors",
+      "size": 4963062048,
+      "sha256": "e36dcda4a4ac3619f5dbdc7737b4b6998d2cf496626399c84fe281c794f7761e",
+      "verified": true
+    },
+    {
+      "name": "model-00006-of-00006.safetensors",
+      "size": 711830844,
+      "sha256": "1a2ec63a606ce55259d6d6d5cf6bb0cf147cb92bf993318c93203b3d355d4824",
+      "verified": true
+    },
+    {
+      "name": "model.safetensors.index.json",
+      "size": 207389,
+      "sha256": null,
+      "verified": true
+    },
+    {
+      "name": "preprocessor_config.json",
+      "size": 782,
+      "sha256": null,
+      "verified": true
+    },
+    {
+      "name": "special_tokens_map.json",
+      "size": 613,
+      "sha256": null,
+      "verified": true
+    },
+    {
+      "name": "tokenizer.json",
+      "size": 11422654,
+      "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+      "verified": true
+    },
+    {
+      "name": "tokenizer_config.json",
+      "size": 5472,
+      "sha256": null,
+      "verified": true
+    },
+    {
+      "name": "video_preprocessor_config.json",
+      "size": 817,
+      "sha256": null,
+      "verified": true
+    },
+    {
+      "name": "vocab.json",
+      "size": 2776833,
+      "sha256": null,
+      "verified": true
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+Configuration: /root/autodl-tmp/projects/lingbot-vla-v2/outputs/robotwin-z3a-local-from20k-gbs1024/launch/config.yaml
+Preflight passed: 2500 episodes; native Muon; no PICA.
+Muon / aug1 / state noise=0.01 / GPUs=2 × micro=64 × accumulation=8 = 1024
+Command: /root/miniconda3/envs/lingbotvla/bin/python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=2 tasks/vla/train_lingbotvla.py /root/autodl-tmp/projects/lingbot-vla-v2/outputs/robotwin-z3a-local-from20k-gbs1024/launch/config.yaml
+Training was not launched.

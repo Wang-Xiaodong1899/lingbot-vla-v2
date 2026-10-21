@@ -305,3 +305,65 @@ done
 Stop everything with `Ctrl-C` (the launcher traps it and kills all child processes), or kill
 the launcher plus any lingering `deploy.lingbot_vla_v2_policy` / `eval_policy_client_lingbotvla.py`
 processes.
+
+### 官方 LeRobot v3 + aug1，从 hgg step 20000 继续训练
+
+本机启动脚本：`experiment/robotwin/train_z3a_official_from20k.sh`。也可从实验仓库
+`/root/autodl-tmp/projects/lingbot-vla/tools/train_z3a_official_from20k.sh` 启动。
+注意：实验仓库缓存版本为 `lingbot-experiments@ffbf35b`，没有
+`Z3a-official-data-aug1` 配置；2026-10-22 尝试 pull 时 GitHub 要求认证。
+这里是根据已能核对的官方数据流程、原生 Muon 和 level 1 增广实现的本地适配，
+尚未确认与上游 Z3a 完全一致。直接使用发布数据内的指令，没有应用实验仓库的
+`instruction_pool.json` seen 指令替换流程。
+
+```bash
+cd /root/autodl-tmp/projects/lingbot-vla-v2
+# 生成配置、打印命令，不检查依赖或启动训练
+DRY_RUN=1 bash experiment/robotwin/train_z3a_official_from20k.sh
+# 验证数据、权重和依赖，不启动训练
+CHECK_ONLY=1 bash experiment/robotwin/train_z3a_official_from20k.sh
+# 正式训练；新增 1000 个优化器更新，每 100 步保存
+MAX_STEPS=1000 SAVE_STEPS=100 bash experiment/robotwin/train_z3a_official_from20k.sh
+```
+
+- 初始权重：`/root/autodl-tmp/models/hggforget-lingbotvla-robotwin-clean-sft/global_step_20000`，
+  沿用同目录上一级的 `robotwin_clean_norm.json` 和机器人关节映射。
+- 数据：`data/downloads/RoboTwin_lerobot_v30.zip.part`，也接受下载完成后去掉 `.part` 的文件。
+  通过固定 SHA-256 校验后解压到 `data/RoboTwin_lerobot_v30`；已校验的完整解压目录可直接复用。
+  v3.0 数据共 2500 episodes、548893 frames。未下载完成或尚未解压完成会中止启动。
+- `optimizer=muon`，保留模型原生矩阵参数 Muon / 非矩阵参数 AdamW 的实现；
+  关闭额外 MoE 专家学习率倍率。默认 LR `1e-4` → `5e-5`、cosine、无 warmup。
+- `LINGBOT_AUG_LEVEL=1`，`STATE_NOISE_STD=0.01`；同视角当前/未来帧共用几何增广参数。
+  保留深度/DINO 辅助损失，PICA 关闭。
+- global batch 固定 1024。默认每卡 micro batch 为 64，按实际可见 GPU 数计算累积：
+  本机两张 A800 为 `2 × 64 × 8 = 1024`。可用 `CUDA_VISIBLE_DEVICES` 和
+  `MICRO_BATCH_SIZE` 调整；不能整除时拒绝启动。启用 FSDP 全分片和梯度检查点。
+- `MAX_STEPS=1000`、`SAVE_STEPS=100` 是本地默认值，可修改；这里的步数是优化器更新次数。
+  原始 20k 目录只有模型权重，没有优化器状态，第一次运行会新建 Muon 状态，从本轮 step 0 开始。
+  后续同一个 `OUTPUT_DIR` 支持训练器的完整检查点恢复；新实验应使用新的输出目录。
+- 默认输出 `outputs/robotwin-z3a-local-from20k-gbs1024`，包含 `train.log`、
+  `launch/config.yaml`、`launch/recipe.json`、训练数据清单和检查点。
+  使用 `OUTPUT_DIR`、`INIT_MODEL`、`DATA_ROOT`、`DATA_ARCHIVE`、`NORM_FILE`、`LR`、`LR_MIN`、
+  `DATA_NUM_WORKERS`、`PYTHON_BIN` 可覆盖本机路径或参数。
+
+2026-10-22 检查通过了原生训练器配置解析、`2 × 64 × 8 = 1024` 的 batch 计算、现有增广单元测试，
+以及真实数据的单样本读取和增广。初始 20k 权重的 6 个分片全部通过 SHA-256 校验。
+已补齐 `weights/depth/moge2-vitb-normal.pt`、`weights/depth/model.pt`、
+`weights/dino_video/teacher_step_10000.pth`，三者均通过官方 SHA-256 校验和实际模型加载；
+DINO 配置通过官方 Git blob 哈希校验。已安装 MoGe 指定的 `utils3d` 提交
+`3fab839f0be9931dac7c8488eb0e1600c236e183`，完整 `CHECK_ONLY=1` 预检查通过。
+未启动 GPU 训练，尚未验证每卡 batch 64 的显存峰值。如需降低每卡 batch，可设置
+`MICRO_BATCH_SIZE=32`，脚本自动将双卡累积改为 16，global batch 仍为 1024。
+
+校验记录位于 `weights/z3a_assets_verified.json` 和 `weights/z3a_initial_model_verified.json`。
+后续需要重新下载/验证辅助权重时可运行（支持 `.part` 断点续传，固定上游 revision）：
+
+```bash
+/root/miniconda3/envs/lingbotvla/bin/python tools/download_z3a_assets.py
+```
+
+本次准备和验证记录已归档到
+[`records/z3a_official_from20k_20261022/`](records/z3a_official_from20k_20261022/)：
+包含启动预检查、增广测试、三个辅助模型的加载和真实数据读取日志，以及数据/权重校验清单、
+训练配置和机器人映射快照。`*.snapshot.yaml`、`train.snapshot.txt` 记录的是本机实际路径，
+运行训练时由启动脚本重新生成配置。当前没有训练 loss 日志，因为尚未启动训练。

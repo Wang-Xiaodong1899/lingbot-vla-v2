@@ -1,0 +1,25 @@
+Validation timestamp: 2026-10-21T16:42:33.019054+00:00
+torch 2.8.0
+transformers 4.57.3
+lerobot 0.4.2
+torchcodec 0.6.0
+utils3d 1.3
+Teacher loaded: weights/depth/moge2-vitb-normal.pt 104743592 parameters
+Teacher loaded: weights/depth/model.pt 324310658 parameters
+  [navit_eval] arch=vit_large rope3d=True attention_mode=flex_block_causal embed_dim=1024
+DINO teacher loaded: 303154176 parameters {'rope3d': True, 'attention_mode': 'flex_block_causal', 'embed_dim': 1024, 'arch': 'vit_large', 'config_path': 'weights/dino_video/config.yaml'}
+/root/miniconda3/envs/lingbotvla/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:2346: UnsupportedFieldAttributeWarning: The 'repr' attribute with value False was provided to the `Field()` function, which has no effect in the context it was used. 'repr' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+/root/miniconda3/envs/lingbotvla/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:2346: UnsupportedFieldAttributeWarning: The 'frozen' attribute with value True was provided to the `Field()` function, which has no effect in the context it was used. 'frozen' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+Overwriting feature type 'VideoFrame' (VideoFrame -> VideoFrame)
+[INFO][lingbotvla.utils.arguments:114] 10/22/2026 00:42:48 >> gradient_accumulation_steps=8, global_batch_size=1024
+Native parser: 2 GPUs x 64 micro batch x 8 accumulation = 1024; native Muon; no PICA
+[WARNING][lingbotvla.models.config_registry:66] 10/22/2026 00:42:48 >> Ignore import error when loading config from lingbotvla.models.vla.pi0.modeling_pi0. No module named 'lerobot.common'
+
+Initializing datasets:   0%|                                                                                                                                   | 0/1 [00:00<?, ?it/s]
+Initializing datasets: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:01<00:00,  1.22s/it]
+Initializing datasets: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:01<00:00,  1.22s/it]
+Dataset frames: 548893
+Augmented sample: {'images': (3, 256, 1536), 'img_masks': (3,), 'state': (55,), 'lang_tokens': (72,), 'lang_masks': (72,), 'actions': (50, 55), 'action_is_pad': (50,), 'joint_mask': (50, 55), 'state_joint_mask': (55,), 'action_joint_mask': (55,), 'image_grid_thw': (3, 3), 'pil_images': (3, 3, 256, 256), 'future_pil_images': (3, 3, 256, 256), 'rep_id': 'str'}
+All checks passed. Training was not started; micro batch 64 GPU memory usage was not measured.

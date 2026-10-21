@@ -1,0 +1,19 @@
+{
+  "source_url": "https://huggingface.co/datasets/TianxingChen/RoboTwin2.0/resolve/main/lerobot_dataset/RoboTwin_lerobot_v30.zip",
+  "revision": "3dc3b798668feb99ac61cc9086d84cbcc3d79186",
+  "archive": "/root/autodl-tmp/projects/lingbot-vla-v2/data/downloads/RoboTwin_lerobot_v30.zip",
+  "archive_bytes": 4100134542,
+  "archive_sha256": "ed5948c2bb693e098e0edc9c693614f8621948b3fc5953748932b34ee5bf0419",
+  "sha256_verified": true,
+  "extracted_crc_verified": true,
+  "dataset_path": "/root/autodl-tmp/projects/lingbot-vla-v2/data/RoboTwin_lerobot_v30",
+  "file_count": 56,
+  "extracted_bytes": 4100143563,
+  "codebase_version": "v3.0",
+  "episodes": 2500,
+  "frames": 548893,
+  "fps": 15,
+  "intended_initial_checkpoint": "/root/autodl-tmp/models/hggforget-lingbotvla-robotwin-clean-sft/global_step_20000",
+  "pica_enabled": false,
+  "training_started": false
+}
