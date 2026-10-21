@@ -48,6 +48,8 @@ from lingbotvla.models.vla.vision_models.module_utils import (
 )
 from lingbotvla.models.vla.lingbot_vla.moe_load_balance import build_moe_load_balance_hook
 import gc
+import copy
+from lingbotvla.utils.pica import attach_pica_projector, update_pica_teacher
 gc.set_threshold(50000, 50, 50)
 
 logger = helper.create_logger(__name__)
@@ -119,6 +121,10 @@ def get_moe_param_groups(model: "torch.nn.Module", args_train) -> Optional[List[
 
 @dataclass
 class MyTrainingArguments(TrainingArguments):
+    pica_params: Dict[str, Any] = field(
+        default_factory=dict,
+        metadata={"help": "PICA action alignment; empty dict disables paired augmentation and EMA."},
+    )
     freeze_vit: bool = field(
         default=False,
         metadata={"help": "Whether or not to freeze the vit parameters."},
@@ -359,6 +365,19 @@ def main():
     )
 
     logger.info_rank0("Prepare model")
+    if args.train.pica_params:
+        if args.model.config_key != "LingbotVLAV2Config":
+            raise ValueError("PICA currently supports LingbotVLAV2Config only")
+        if (args.train.data_parallel_mode != "fsdp2" or not args.train.enable_mixed_precision
+                or args.train.init_device != "cuda" or args.train.use_compile
+                or args.train.enable_reentrant or args.train.expert_parallel_size != 1
+                or args.train.freeze_vit or args.train.enable_fsdp_offload
+                or not args.train.module_fsdp_enable or not args.train.vlm_fsdp):
+            raise ValueError("PICA requires FSDP2, FP32 masters with mixed precision, init_device=cuda, "
+                             "module_fsdp_enable/vlm_fsdp, EP=1, non-reentrant checkpointing, "
+                             "use_compile=false, freeze_vit=false and no FSDP CPU offload")
+        if args.train.ckpt_manager != "dcp" or args.train.allow_partial_checkpoint:
+            raise ValueError("PICA requires strict DCP checkpoints for teacher/projector resume")
     config_kwargs = {**vars(args.model), **vars(args.train)}
     config_registry = get_config_registry()
 
@@ -381,6 +400,11 @@ def main():
         moe_implementation=getattr(args.model, 'moe_implementation', None),
     )
     use_depth_align = True if args.train.align_params != {} else False
+    pica_teacher = None
+    if args.train.pica_params:
+        # Attach only after loading baseline weights. Inference policies never
+        # construct this head; DCP includes it for exact training continuation.
+        attach_pica_projector(model, args.train.pica_params)
     use_future_depth = args.train.align_params.get('depth', {}).get('use_future_depth', False)
     use_future_video = use_depth_align and args.train.align_params.get('use_future_video', False)
     depth_model_type = None
@@ -491,6 +515,36 @@ def main():
         use_future_image=args.data.use_future_image,
     )
     logger.info_rank0(model)
+    if args.train.pica_params:
+        logger.info_rank0("Building FP32 EMA teacher from baseline, after sharding student")
+        pica_teacher = build_foundation_model(
+            config_path=args.model.config_path,
+            config_cls=copy.deepcopy(config_cls),
+            weights_path=args.model.model_path,
+            torch_dtype="float32",
+            init_device=args.train.init_device,
+            force_use_huggingface=args.model.force_use_huggingface,
+            config_kwargs=config_kwargs,
+            moe_implementation=getattr(args.model, 'moe_implementation', None),
+        )
+        pica_teacher.requires_grad_(False)
+        pica_teacher.eval()
+        pica_teacher = build_parallelize_model(
+            pica_teacher,
+            enable_full_shard=True,
+            enable_mixed_precision=True,
+            enable_gradient_checkpointing=False,
+            init_device=args.train.init_device,
+            basic_modules=pica_teacher._no_split_modules,
+            enable_forward_prefetch=False,
+            fsdp_llm_blocks=False,
+            ignore_norm=False,
+            use_depth_align=use_depth_align,
+            split_fused_experts_from_decoder_fsdp=args.train.split_fused_experts_from_decoder_fsdp,
+            vlm_fsdp=True,
+            use_future_image=args.data.use_future_image,
+        )
+        update_pica_teacher(pica_teacher, model, decay=0.0)
     if args.train.use_compile:
         model = torch.compile(model)
 
@@ -623,7 +677,7 @@ def main():
                     save_checkpoint_path=checkpoint_path,
                     output_dir=args.train.output_dir,
                     ckpt_manager=args.train.ckpt_manager,
-                    save_ema=checkpoint_state.get("ema") is not None,
+                    save_ema=checkpoint_state.get("ema") is not None and not args.train.pica_params,
                     enable_fp32=args.train.enable_fp32,
                     model_assets=model_assets,
                     epoch=epoch,
@@ -672,11 +726,13 @@ def main():
         last_err = None
         loaded = False
         for cp in candidates:
-            state = {"model": model, "ema": None, "optimizer": optimizer, "extra_state": {}}  # cannot be None
+            state = {"model": model, "ema": pica_teacher, "optimizer": optimizer, "extra_state": {}}
             try:
                 if args.train.ckpt_manager == 'dcp':
                     validate_checkpoint(cp, dist.get_world_size())
                 Checkpointer.load(cp, state, allow_partial_load=getattr(args.train, 'allow_partial_checkpoint', False))
+                if state["extra_state"].get("pica_params", {}) != args.train.pica_params:
+                    raise ValueError("Cannot resume with different PICA settings")
                 global_step = state["extra_state"]["global_step"]
                 start_epoch = global_step // args.train.train_steps
                 start_step = global_step % args.train.train_steps
@@ -685,6 +741,8 @@ def main():
                     train_dataloader.load_state_dict(state["extra_state"]["train_dataloader"])
                 environ_meter.load_state_dict(state["extra_state"]["environ_meter"])
                 torch.set_rng_state(state["extra_state"]["torch_rng_state"])
+                if "cuda_rng_state" in state["extra_state"]:
+                    torch.cuda.set_rng_state(state["extra_state"]["cuda_rng_state"])
                 if start_step == 0:  # resume at the end of epoch
                     iter(train_dataloader)  # clear resume state and prefetch data
                 dist.barrier()
@@ -771,6 +829,31 @@ def main():
                     k: v.cuda(non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in micro_batch.items()
                 }
                 future_video_effective_fps = micro_batch.pop('future_video_effective_fps', None)
+                if pica_teacher is not None:
+                    clean_images = micro_batch.pop('pica_teacher_images')
+                    action_dtype = torch.float32 if args.train.action_fp32 else micro_batch['state'].dtype
+                    # Both forwards receive the very same eta and tau: the
+                    # teacher does NOT receive clean or less noisy actions.
+                    micro_batch['noise'] = torch.randn_like(micro_batch['actions'], dtype=action_dtype)
+                    micro_batch['time'] = model.model.sample_time(
+                        micro_batch['actions'].shape[0], micro_batch['actions'].device,
+                    ).to(action_dtype)
+                    teacher_inputs = {key: micro_batch[key] for key in (
+                        'img_masks', 'state', 'lang_tokens', 'lang_masks', 'actions',
+                        'noise', 'time', 'image_grid_thw',
+                    ) if key in micro_batch}
+                    with torch.no_grad():
+                        micro_batch['pica_target'] = pica_teacher(
+                            **teacher_inputs, images=clean_images,
+                            action_feature_layer=args.train.pica_params['teacher_layer'],
+                            action_features_only=True,
+                        ).detach()
+                    # No teacher backward will run: explicitly free any root
+                    # all-gather retained by FSDP before updating local masters.
+                    from torch.distributed._composable.fsdp import FSDPModule
+                    for module in pica_teacher.modules():
+                        if isinstance(module, FSDPModule):
+                            module.reshard()
                 depth_forward_time = 0
                 if use_depth_align:
                     with torch.no_grad():
@@ -902,6 +985,8 @@ def main():
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm, foreach=True)
 
             optimizer.step()
+            if pica_teacher is not None:
+                update_pica_teacher(pica_teacher, model, args.train.pica_params['ema_decay'])
             lr_scheduler.step()
             optimizer.zero_grad()
             if hasattr(grad_norm, "full_tensor"):
@@ -988,7 +1073,7 @@ def main():
                         scalar = _tb_scalar(value)
                         if scalar is not None:
                             writer.add_scalar(key, scalar, global_step)
-                    elif key.startswith("align/"):
+                    elif key.startswith(("align/", "pica/")):
                         scalar = _tb_scalar(value)
                         if scalar is not None:
                             writer.add_scalar(key, scalar, global_step)
@@ -1110,7 +1195,7 @@ def main():
 
                 state = {
                     "model": model,
-                    "ema": None,
+                    "ema": pica_teacher,
                     "optimizer": optimizer,
                     "extra_state": {
                         "global_step": global_step,
@@ -1118,6 +1203,8 @@ def main():
                         "train_dataloader": train_dataloader.state_dict(),
                         "environ_meter": environ_meter.state_dict(),
                         "torch_rng_state": torch.get_rng_state(),
+                        "cuda_rng_state": torch.cuda.get_rng_state(),
+                        "pica_params": dict(args.train.pica_params),
                     },
                 }
                 if args.train.global_rank == 0:
@@ -1151,7 +1238,7 @@ def main():
                 save_checkpoint_path = os.path.join(args.train.save_checkpoint_path, f"global_step_{global_step}")
                 state = {
                     "model": model,
-                    "ema": None,
+                    "ema": pica_teacher,
                     "optimizer": optimizer,
                     "extra_state": {
                         "global_step": global_step,
@@ -1159,6 +1246,8 @@ def main():
                         "train_dataloader": train_dataloader.state_dict(),
                         "environ_meter": environ_meter.state_dict(),
                         "torch_rng_state": torch.get_rng_state(),
+                        "cuda_rng_state": torch.cuda.get_rng_state(),
+                        "pica_params": dict(args.train.pica_params),
                     },
                 }
                 Checkpointer.save(args.train.save_checkpoint_path, state, global_steps=global_step)
@@ -1177,7 +1266,7 @@ def main():
             save_checkpoint_path = os.path.join(args.train.save_checkpoint_path, f"global_step_{global_step}")
             state = {
                 "model": model,
-                "ema": None,
+                "ema": pica_teacher,
                 "optimizer": optimizer,
                 "extra_state": {
                     "global_step": global_step,
@@ -1185,6 +1274,8 @@ def main():
                     "train_dataloader": train_dataloader.state_dict(),
                     "environ_meter": environ_meter.state_dict(),
                     "torch_rng_state": torch.get_rng_state(),
+                    "cuda_rng_state": torch.cuda.get_rng_state(),
+                    "pica_params": dict(args.train.pica_params),
                 },
             }
             Checkpointer.save(args.train.save_checkpoint_path, state, global_steps=global_step)

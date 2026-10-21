@@ -322,6 +322,10 @@ class AsyncHFCheckpointSaver:
                 ema=ema,
             )
             save_kwargs = {"model_assets": model_assets}
+            # Training-only PICA head stays in DCP, never in deployed policies.
+            for key in list(state_dict):
+                if key.startswith("pica_projector."):
+                    del state_dict[key]
             if enable_fp32:
                 save_kwargs["save_dtype"] = torch.float32
             save_model_weights(tmp_dir, state_dict, **save_kwargs)

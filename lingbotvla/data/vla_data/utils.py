@@ -416,6 +416,18 @@ class FeatureTransform:
         state = prepare_state(batch_dict, self.model_config.max_state_dim) 
         actions = prepare_action(batch_dict, self.model_config.max_action_dim)
         return_image_grid_thw = getattr(self.model_config, "return_image_grid_thw", False)
+        pica_enabled = bool(getattr(self.model_config, "pica_params", {})) and not policy_eval
+        teacher_images = None
+        if pica_enabled:
+            if self.disabled_image_features:
+                raise ValueError("PICA requires image features")
+            from .pica_augmentation import augment_observation_pair
+            teacher_images, _, _, teacher_grid = prepare_images(
+                self.processor.image_processor, batch_dict,
+                image_keys=self.feature_config.images, train=False,
+                return_image_grid_thw=return_image_grid_thw,
+            )
+            batch_dict = augment_observation_pair(batch_dict)
         if not self.disabled_image_features:
             (
                 images,
@@ -427,7 +439,7 @@ class FeatureTransform:
                 self.processor.image_processor,
                 batch_dict,
                 image_keys=self.feature_config.images,
-                train=self.image_augment and not policy_eval,
+                train=self.image_augment and not policy_eval and not pica_enabled,
                 use_depth_align=self.use_depth_align,
                 return_image_grid_thw=return_image_grid_thw,
                 return_augment_params=True,
@@ -437,7 +449,7 @@ class FeatureTransform:
                 future_images, _, future_pil_images, _ = prepare_images(
                     self.processor.image_processor, future_obs,
                     image_keys=self.feature_config.images,
-                    train=self.image_augment and not policy_eval,
+                    train=self.image_augment and not policy_eval and not pica_enabled,
                     use_depth_align=self.use_depth_align,
                     return_image_grid_thw=False,
                     augment_params=image_augment_params,
@@ -487,6 +499,10 @@ class FeatureTransform:
             }
         if image_grid_thw is not None:
             batch_dict['image_grid_thw'] = image_grid_thw
+        if pica_enabled:
+            batch_dict['pica_teacher_images'] = teacher_images
+            if image_grid_thw is not None and not torch.equal(image_grid_thw, teacher_grid):
+                raise ValueError("PICA student and teacher must have identical image token grids")
 
         if self.use_depth_align: 
             batch_dict['pil_images'] = pil_images

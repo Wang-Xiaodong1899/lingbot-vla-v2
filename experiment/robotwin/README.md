@@ -1,5 +1,94 @@
 # Generate Lerobot Dataset from RoboTwin Data
 
+## PICA action alignment on the V2 clean baseline
+
+`train_pica_from20k.sh` uses
+`/root/autodl-tmp/models/hggforget-lingbotvla-robotwin-clean-sft/global_step_20000`
+as pretrained weights. It starts a **new** optimizer/schedule at step 0 and reads
+only the existing 50-task clean manifest. Subsequent launches resume complete
+PICA checkpoints in the new output directory. It does not overwrite the baseline.
+The recipe is in `configs/vla/robotwin/robotwin_pica_from20k.yaml`.
+
+```bash
+# Validate baseline, clean datasets, normalization and auxiliary teacher assets.
+CHECK_ONLY=1 bash experiment/robotwin/train_pica_from20k.sh
+
+# On a GPU host with those assets installed, first run a short smoke test.
+OUTPUT_DIR="$PWD/outputs/robotwin-pica-smoke" MAX_STEPS=2 \
+  bash experiment/robotwin/train_pica_from20k.sh
+
+# Default: four GPUs, microbatch 1, accumulation 4, global batch 16.
+bash experiment/robotwin/train_pica_from20k.sh
+
+# Example batch override; global batch must divide GPUs × microbatch exactly.
+CUDA_VISIBLE_DEVICES=0,1,2,3 MICRO_BATCH_SIZE=2 GLOBAL_BATCH_SIZE=32 \
+  bash experiment/robotwin/train_pica_from20k.sh
+```
+
+The supplied training note describes LingBot-VA. This implementation adapts its
+appearance and layer alignment to **LingBot-VLA-V2**, whose 36-layer action expert
+has hidden width 768. The student receives augmented images; the FP32 EMA teacher
+receives the original images and exactly the same action noise and timestep.
+Student block output 8 is projected through `Linear(768,512) → GELU → Linear(512,768)`
+and aligned to teacher block output 20 using tokenwise
+negative cosine similarity. State tokens and padded action tokens are excluded.
+The teacher stops after block 20 and has no gradients. EMA decay is 0.9999 and is
+applied once after each optimizer step, including when accumulating gradients.
+
+Total loss retains the baseline action flow loss, current/future depth, current/
+future visual feature losses and MoE regularizers, and adds `0.05 × PICA loss`.
+Auxiliary visual/depth targets are computed from the **augmented** current/future
+images. This V2 model has no future-video flow-matching noise variable; there is
+no artificial video noise gap and no reduction of teacher action noise. Batch 16
+means **16 observation/action-chunk samples**, not the paper's 16 full episodes.
+The horizon stays 50. The default 30,000 updates, layer indices, projector size,
+alignment weight and EMA decay follow the note; the `1e-5 → 5e-6` learning-rate
+schedule is a conservative fine-tuning choice, not a reported paper setting.
+The existing Muon/AdamW optimizer grouping is retained, including for the projector.
+
+Augmentation is sampled independently for each camera, sharing parameters and
+the same Gaussian noise field between that camera's current and future frames.
+Mixture probabilities are 1/4 photometric, 1/4 noise, 1/2 both. Photometric order
+is brightness, contrast, saturation, hue, gamma, exposure (an implementation
+choice). Ranges follow the training note; noise std is 0.015 in [0,1]. With
+probability 0.25, crop side length is 0.92–1.0 followed by rotation within ±8°.
+No blur/fog group is enabled. Legacy image/state augmentation is disabled in
+this launcher. Evaluation with `policy_eval=True` never uses PICA augmentation.
+
+DCP checkpoints contain student, projector, EMA teacher, optimizer, scheduler,
+dataloader and CPU/CUDA RNG states. Resume requires the same PICA configuration
+and strict checkpoint loading. Data-worker/prefetch randomness retains the
+existing dataloader's resume semantics; bitwise-identical augmented batches
+across restarts are not promised. `hf_ckpt` contains the student policy with the
+projector removed; no teacher is needed for inference. FSDP2 shards FP32 teacher
+master weights; gathered forward weights use BF16. This adds a teacher model to
+training memory usage, so establish a working microbatch on the target hardware.
+The recipe currently requires FSDP2, EP=1, CUDA initialization, mixed precision,
+no CPU offload/compile and non-reentrant gradient checkpointing.
+
+TensorBoard reports `pica/alignment_loss` and `pica/alignment_loss_weighted`
+(last microbatch on rank 0, matching the existing auxiliary metric reporting).
+Negative alignment loss is expected. Compare the student `hf_ckpt` against the
+20k baseline on **both clean and randomized evaluations with identical task,
+seed, instruction and inference settings**. Use held-out trajectories for action
+prediction error; rollout success measures closed-loop behavior. Training-loss
+reduction alone does not establish either improvement. If testing an
+augmentation-only ablation, retain the same paired augmentation and omit the
+alignment term in a separate experiment; disabling `pica_params` disables both
+the paired augmentation and alignment.
+
+CPU regression tests (small substitute blocks, actual production forward methods):
+
+```bash
+PYTHONNOUSERSITE=1 /root/miniconda3/envs/lingbotvla/bin/python \
+  -m unittest discover -s tests -p test_pica.py -v
+```
+
+These cover temporal/camera augmentation, shared noisy actions, layer capture,
+early teacher exit, padding, stop-gradient, projector gradients, FP32 EMA,
+transactional DCP save/restore and student-only HF export. CUDA kernels and
+multi-GPU FSDP execution require the short GPU smoke run above.
+
 This guide explains how to process raw data from **RoboTwin** and convert it into the **LerobotDataset** format following the official RoboTwin instructions.
 
 ## 1. Clone the Official RoboTwin Repository

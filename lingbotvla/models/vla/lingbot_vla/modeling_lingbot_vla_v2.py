@@ -320,11 +320,18 @@ class QwenvlWithExpertV2Model(PreTrainedModel):
         ada_cond: List[torch.FloatTensor] = None,
         visual_pos_masks: Optional[torch.Tensor] = None,
         deepstack_visual_embeds: Optional[list[torch.Tensor]] = None,
+        action_feature_layer: Optional[int] = None,
+        action_features_only: bool = False,
     ):
         models = [self.qwenvl.model.language_model, self.qwen_expert.model]
         num_layers = self.qwenvl.config.text_config.num_hidden_layers
         action_num_layers = self.config.qwen_expert_config.num_hidden_layers
         router_logits_list = []
+        action_features = None
+        if action_features_only and action_feature_layer is None:
+            raise ValueError("action_features_only requires action_feature_layer")
+        if action_feature_layer is not None and not 0 <= action_feature_layer < num_layers:
+            raise ValueError(f"Action feature layer out of range: {action_feature_layer}")
 
         assert action_num_layers == num_layers, (
             "Action expert and VLM must have the same number of layers "
@@ -401,6 +408,11 @@ class QwenvlWithExpertV2Model(PreTrainedModel):
                 outputs_embeds.append(out_emb)
                 start = end
             inputs_embeds = outputs_embeds
+            if layer_idx == action_feature_layer:
+                # Block output after residual/MLP, before the final stream norm.
+                action_features = inputs_embeds[1]
+                if action_features_only:
+                    return action_features
 
         outputs_embeds = []
         for i, hidden_states in enumerate(inputs_embeds):
@@ -411,7 +423,8 @@ class QwenvlWithExpertV2Model(PreTrainedModel):
                 outputs_embeds.append(out_emb)
             else:
                 outputs_embeds.append(models[i].norm(hidden_states))
-        return outputs_embeds, past_key_values, router_logits_list
+        result = (outputs_embeds, past_key_values, router_logits_list)
+        return (*result, action_features) if action_feature_layer is not None else result
 
     def get_attention_interface(self):
         if self.config.attention_implementation == "flex":
@@ -781,6 +794,8 @@ class FlowMatchingV2(FlowMatchingV1):
         future_video_targets=None,
         future_video_cls_targets=None,
         future_video_current_patch=None,
+        action_feature_layer=None,
+        action_features_only=False,
     ) -> Tensor:
         dtype = state.dtype
         device = state.device
@@ -830,7 +845,7 @@ class FlowMatchingV2(FlowMatchingV1):
         )
         position_ids = self._build_full_position_ids(prefix_position_ids, prefix_pad_masks, suffix_pad_masks)
 
-        (outputs_embeds, suffix_out), _, router_logits_list = self.qwenvl_with_expert.forward(
+        backbone_outputs = self.qwenvl_with_expert.forward(
             attention_mask=att_2d_masks,
             position_ids=position_ids,
             vlm_position_ids=prefix_position_ids,
@@ -841,7 +856,12 @@ class FlowMatchingV2(FlowMatchingV1):
             ada_cond=time_embs if getattr(self.config, "adanorm_time", False) else None,
             visual_pos_masks=visual_pos_masks,
             deepstack_visual_embeds=deepstack_visual_embeds,
+            action_feature_layer=action_feature_layer,
+            action_features_only=action_features_only,
         )
+        if action_features_only:
+            return backbone_outputs[:, -self.config.n_action_steps:]
+        (outputs_embeds, suffix_out), _, router_logits_list = backbone_outputs[:3]
         align_metrics = {}
         if self.config.align_params != {}:
             loss_depth, loss_future_depth, depth_preds, future_depth_preds = self.depth_emb_forward(outputs_embeds, depth_targets, img_masks,future_depth_targets,)
@@ -915,6 +935,8 @@ class FlowMatchingV2(FlowMatchingV1):
         )
         if align_metrics:
             moe_metrics.update(align_metrics)
+        if action_feature_layer is not None:
+            moe_metrics["_pica_action_features"] = backbone_outputs[3][:, -self.config.n_action_steps:]
         return losses, loss_depth, loss_future_depth, loss_future_video, depth_preds, seq_wise_loss, router_z_loss, moe_metrics, future_depth_preds, future_video_preds, current_video_preds
 
     def sample_actions(
@@ -1257,12 +1279,21 @@ class LingbotVlaV2Policy(PreTrainedModel):
         future_video_targets=None,
         future_video_cls_targets=None,
         future_video_current_patch=None,
+        pica_target=None,
+        action_feature_layer=None,
+        action_features_only=False,
         **kwargs
     ) -> tuple[Tensor, dict[str, Tensor]]:
         loss_dict = {}
         if getattr(self.config, "action_fp32", False):
             state = state.float()
             actions = actions.float()
+        if action_features_only:
+            return self.model.forward(
+                images, img_masks, lang_tokens, lang_masks, state, actions, noise, time,
+                image_grid_thw=image_grid_thw,
+                action_feature_layer=action_feature_layer, action_features_only=True,
+            )
         (
             losses,
             loss_depth,
@@ -1291,6 +1322,7 @@ class LingbotVlaV2Policy(PreTrainedModel):
             future_video_targets=future_video_targets,
             future_video_cls_targets=future_video_cls_targets,
             future_video_current_patch=future_video_current_patch,
+            action_feature_layer=self.config.pica_params["student_layer"] if pica_target is not None else None,
         )
 
         if joint_mask is not None:
@@ -1317,6 +1349,15 @@ class LingbotVlaV2Policy(PreTrainedModel):
             + router_z_loss
         )
         loss_dict["router_z_loss"] = router_z_loss.detach() if torch.is_tensor(router_z_loss) else router_z_loss
+        if pica_target is not None:
+            from lingbotvla.utils.pica import action_alignment_loss
+            features = moe_metrics.pop("_pica_action_features")
+            projected = self.pica_projector(features.to(self.pica_projector[0].weight.dtype))
+            pica_loss = action_alignment_loss(projected, pica_target, action_is_pad, joint_mask)
+            weighted_pica_loss = self.config.pica_params["weight"] * pica_loss
+            total_loss = total_loss + weighted_pica_loss
+            loss_dict["pica/alignment_loss"] = pica_loss.detach()
+            loss_dict["pica/alignment_loss_weighted"] = weighted_pica_loss.detach()
         if moe_metrics:
             loss_dict.update(moe_metrics)
         return total_loss, loss_vla, loss_depth, loss_future_depth, loss_future_video, seq_wise_loss, loss_dict, depth_preds, future_depth_preds, future_video_preds, current_video_preds
