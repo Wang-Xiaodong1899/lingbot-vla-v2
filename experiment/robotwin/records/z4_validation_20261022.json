@@ -1,0 +1,243 @@
+{
+  "frames": 548893,
+  "checks": "clean preprocessing bit-identical; augmented images changed; state/actions/language/masks unchanged",
+  "traces": [
+    {
+      "policy": "z4",
+      "clean": false,
+      "cameras": {
+        "observation.images.camera_top": {
+          "color": true,
+          "affine": true,
+          "erase": true,
+          "noise": null,
+          "blur": null,
+          "jpeg": false,
+          "erase_applied": false,
+          "box": null,
+          "color_params": {
+            "brightness": 0.9383609621682386,
+            "contrast": 1.114865537537752,
+            "saturation": 1.3170063193813883,
+            "temperature": 0.030687487756907578
+          },
+          "affine_params": {
+            "scale": 1.0084099956325496,
+            "dx": 0.051491535827300955,
+            "dy": -0.026856829059999678
+          },
+          "protected_fraction": 0.6761016845703125
+        },
+        "observation.images.camera_wrist_left": {
+          "color": true,
+          "affine": false,
+          "erase": true,
+          "noise": "gaussian",
+          "blur": null,
+          "jpeg": false,
+          "erase_applied": true,
+          "box": [
+            9,
+            57,
+            26,
+            31
+          ],
+          "color_params": {
+            "brightness": 0.3846521597709864,
+            "contrast": 0.8942947858498714,
+            "saturation": 1.3962526641411372,
+            "temperature": -0.0035437356635451625
+          },
+          "erase_mode": "mosaic",
+          "noise_strength": 0.009629094152795708,
+          "protected_fraction": 0.4708709716796875
+        },
+        "observation.images.camera_wrist_right": {
+          "color": true,
+          "affine": false,
+          "erase": true,
+          "noise": "gaussian",
+          "blur": "gaussian",
+          "jpeg": false,
+          "erase_applied": true,
+          "box": [
+            69,
+            6,
+            27,
+            40
+          ],
+          "color_params": {
+            "brightness": 0.6416703005830937,
+            "contrast": 0.7834549758884563,
+            "saturation": 1.1315403922527603,
+            "temperature": 0.024851655355158986
+          },
+          "erase_mode": "solid",
+          "noise_strength": 0.015352395575573746,
+          "blur_sigma": 0.7690428113822863,
+          "protected_fraction": 0.466827392578125
+        }
+      }
+    },
+    {
+      "policy": "z4",
+      "clean": false,
+      "cameras": {
+        "observation.images.camera_top": {
+          "color": true,
+          "affine": false,
+          "erase": true,
+          "noise": "gaussian",
+          "blur": null,
+          "jpeg": true,
+          "erase_applied": false,
+          "box": null,
+          "color_params": {
+            "brightness": 0.3803112029575805,
+            "contrast": 0.634399057952203,
+            "saturation": 1.4061581477078091,
+            "temperature": -0.02547054373237668
+          },
+          "noise_strength": 0.011611741041140999,
+          "jpeg_quality": 88,
+          "protected_fraction": 0.7708892822265625
+        },
+        "observation.images.camera_wrist_left": {
+          "color": true,
+          "affine": false,
+          "erase": true,
+          "noise": null,
+          "blur": null,
+          "jpeg": false,
+          "erase_applied": true,
+          "box": [
+            202,
+            19,
+            33,
+            21
+          ],
+          "color_params": {
+            "brightness": 1.0727504646343609,
+            "contrast": 1.3347489480336265,
+            "saturation": 1.1528289018933213,
+            "temperature": -0.03721448347375719
+          },
+          "erase_mode": "solid",
+          "protected_fraction": 0.473663330078125
+        },
+        "observation.images.camera_wrist_right": {
+          "color": true,
+          "affine": false,
+          "erase": true,
+          "noise": null,
+          "blur": null,
+          "jpeg": false,
+          "erase_applied": true,
+          "box": [
+            125,
+            0,
+            63,
+            38
+          ],
+          "color_params": {
+            "brightness": 0.7453421283713519,
+            "contrast": 0.7814767114234028,
+            "saturation": 1.0851720757096368,
+            "temperature": 0.03741137822126771
+          },
+          "erase_mode": "solid",
+          "protected_fraction": 0.5634918212890625
+        }
+      }
+    },
+    {
+      "policy": "z4",
+      "clean": false,
+      "cameras": {
+        "observation.images.camera_top": {
+          "color": true,
+          "affine": false,
+          "erase": true,
+          "noise": "gaussian",
+          "blur": "motion",
+          "jpeg": false,
+          "erase_applied": false,
+          "box": null,
+          "color_params": {
+            "brightness": 1.0691558591656767,
+            "contrast": 0.9395790966013601,
+            "saturation": 0.8002820080304007,
+            "temperature": -0.01855747596673095
+          },
+          "noise_strength": 0.018006543083644574,
+          "motion_size": 3,
+          "motion_angle": 75.24318475502794,
+          "protected_fraction": 0.8213958740234375
+        },
+        "observation.images.camera_wrist_left": {
+          "color": true,
+          "affine": true,
+          "erase": true,
+          "noise": "gaussian",
+          "blur": null,
+          "jpeg": false,
+          "erase_applied": true,
+          "box": [
+            208,
+            15,
+            24,
+            31
+          ],
+          "color_params": {
+            "brightness": 0.5127338538300341,
+            "contrast": 0.7891183098853292,
+            "saturation": 1.3825448783606418,
+            "temperature": -0.026710427545745465
+          },
+          "affine_params": {
+            "scale": 1.0437483254842974,
+            "dx": -0.053875710024119776,
+            "dy": 0.05136479820726461
+          },
+          "erase_mode": "pixel_noise",
+          "noise_strength": 0.010370031509668389,
+          "protected_fraction": 0.544281005859375
+        },
+        "observation.images.camera_wrist_right": {
+          "color": true,
+          "affine": false,
+          "erase": true,
+          "noise": null,
+          "blur": "gaussian",
+          "jpeg": true,
+          "erase_applied": false,
+          "box": null,
+          "color_params": {
+            "brightness": 0.9988055215625552,
+            "contrast": 0.6835028687884527,
+            "saturation": 1.5402658205267294,
+            "temperature": -0.04526343853693425
+          },
+          "blur_sigma": 0.5529427649970753,
+          "jpeg_quality": 53,
+          "protected_fraction": 0.711090087890625
+        }
+      }
+    }
+  ],
+  "training_started": false,
+  "checked_at_utc": "2026-10-22T03:24:23.559644+00:00",
+  "unit_tests": {
+    "z4": 10,
+    "b_augmentation_regression": 5,
+    "pica_regression": 7
+  },
+  "native_config": {
+    "optimizer": "muon",
+    "micro_batch_size": 32,
+    "gpus": 2,
+    "gradient_accumulation_steps": 16,
+    "global_batch_size": 1024
+  },
+  "foreground_detector": "Conservative edge/color/texture/background-connectivity heuristic with center guard; not semantic segmentation"
+}

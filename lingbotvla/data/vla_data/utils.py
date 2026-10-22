@@ -417,6 +417,12 @@ class FeatureTransform:
         actions = prepare_action(batch_dict, self.model_config.max_action_dim)
         return_image_grid_thw = getattr(self.model_config, "return_image_grid_thw", False)
         pica_enabled = bool(getattr(self.model_config, "pica_params", {})) and not policy_eval
+        z4_enabled = os.environ.get("LINGBOT_AUG_POLICY", "") == "z4" and not policy_eval
+        if z4_enabled:
+            if pica_enabled or self.disabled_image_features:
+                raise ValueError("Z4 requires images and cannot be combined with PICA")
+            from .z4_augmentation import augment_observation
+            batch_dict = augment_observation(batch_dict)
         teacher_images = None
         if pica_enabled:
             if self.disabled_image_features:
@@ -439,7 +445,7 @@ class FeatureTransform:
                 self.processor.image_processor,
                 batch_dict,
                 image_keys=self.feature_config.images,
-                train=self.image_augment and not policy_eval and not pica_enabled,
+                train=self.image_augment and not policy_eval and not pica_enabled and not z4_enabled,
                 use_depth_align=self.use_depth_align,
                 return_image_grid_thw=return_image_grid_thw,
                 return_augment_params=True,
@@ -449,7 +455,7 @@ class FeatureTransform:
                 future_images, _, future_pil_images, _ = prepare_images(
                     self.processor.image_processor, future_obs,
                     image_keys=self.feature_config.images,
-                    train=self.image_augment and not policy_eval and not pica_enabled,
+                    train=self.image_augment and not policy_eval and not pica_enabled and not z4_enabled,
                     use_depth_align=self.use_depth_align,
                     return_image_grid_thw=False,
                     augment_params=image_augment_params,

@@ -1,0 +1,27 @@
+# Probabilities are conditional on entering the 90% augmentation branch.
+clean_probability: 0.10
+color_probability: 0.80
+brightness: [0.25, 1.10]
+contrast: [0.50, 1.50]
+saturation: [0.40, 1.60]
+temperature_shift: 0.06  # opposite red/blue gains; green stays unchanged
+affine_probability: 0.50
+scale: [0.90, 1.10]
+translation: 0.06       # fraction of image width/height; black border
+erase_probability: 0.95
+erase_area: [0.01, 0.06]
+erase_aspect: [0.40, 2.50]
+erase_attempts: 64
+mosaic_block: 8
+foreground_margin: 5   # pixels after the dataset's image resize
+protected_center: 0.60 # extra conservative guard, fraction of width AND height
+gaussian_noise_probability: 0.50
+salt_pepper_probability: 0.15  # mutually exclusive with Gaussian noise
+gaussian_noise_std: [0.005, 0.020] # pixels scaled to [0,1]
+salt_pepper_amount: [0.001, 0.010] # fraction of pixels; salt/pepper split 50/50
+gaussian_blur_probability: 0.25
+motion_blur_probability: 0.10    # mutually exclusive with Gaussian blur
+gaussian_blur_sigma: [0.30, 1.00]
+motion_blur_sizes: [3, 5, 7]
+jpeg_probability: 0.30
+jpeg_quality: [35, 90]

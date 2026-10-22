@@ -6,6 +6,7 @@ the implemented level-1 augmentation and 0.01 normalized-state noise.
 """
 import hashlib
 import importlib
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
@@ -63,6 +64,24 @@ def main():
     output = Path(os.environ["OUTPUT_DIR"]).resolve()
     launch = output / "launch"
     launch.mkdir(parents=True, exist_ok=True)
+    recipe = os.environ.get("LINGBOT_TRAIN_RECIPE", "z3a")
+    if recipe not in ("z3a", "z4"):
+        raise ValueError("Unknown training recipe")
+    z4_config = None
+    if recipe == "z4":
+        from lingbotvla.data.vla_data.z4_augmentation import load_config
+        z4_config = json.loads(json.dumps(asdict(load_config(os.environ.get("LINGBOT_Z4_CONFIG")))))
+    # A continuation must not silently switch augmentation on an existing run.
+    previous_path = launch / "recipe.json"
+    if any((output / "checkpoints").glob("global_step_*")):
+        if not previous_path.is_file():
+            raise ValueError("Existing checkpoints have no recipe record; use a new OUTPUT_DIR")
+        previous = json.loads(previous_path.read_text())
+        old_policy = previous.get("augmentation_policy", "z3a")
+        if old_policy != recipe or (recipe == "z4" and previous.get("z4_config") != z4_config):
+            raise ValueError("Existing run has a different augmentation recipe; use a new OUTPUT_DIR")
+    if z4_config is not None:
+        (launch / "z4_augmentation.yaml").write_text(yaml.safe_dump(z4_config, sort_keys=False))
     checkpoint = Path(os.environ.get("INIT_MODEL", "/root/autodl-tmp/models/hggforget-lingbotvla-robotwin-clean-sft/global_step_20000")).resolve()
     dataset = Path(os.environ.get("DATA_ROOT", ROOT / "data/RoboTwin_lerobot_v30")).resolve()
     norm = Path(os.environ.get("NORM_FILE", checkpoint.parent / "robotwin_clean_norm.json")).resolve()
@@ -106,12 +125,17 @@ def main():
                           config_path=str(ROOT / "weights/dino_video/config.yaml"))
     (launch / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     provenance = {
-        "recipe": "local official-data aug1 adaptation; exact upstream Z3a unverified",
+        "recipe": ("Z4: 10% original / 90% combined image corruptions" if recipe == "z4" else
+                   "local official-data aug1 adaptation; exact upstream Z3a unverified"),
         "initial_checkpoint": str(checkpoint), "dataset": str(dataset),
         "optimizer": "muon", "global_batch_size": 1024,
-        "augmentation_level": 1, "state_noise_std": float(os.environ["LINGBOT_STATE_NOISE_STD"]),
+        "augmentation_policy": recipe,
+        "augmentation_level": 0 if recipe == "z4" else 1,
+        "state_noise_std": float(os.environ["LINGBOT_STATE_NOISE_STD"]),
         "initial_optimizer_state": "not supplied; new Muon state, training steps start at 0",
     }
+    if z4_config is not None:
+        provenance["z4_config"] = z4_config
     (launch / "recipe.json").write_text(json.dumps(provenance, indent=2) + "\n")
     print(f"Configuration: {launch / 'config.yaml'}", flush=True)
     if os.environ.get("DRY_RUN") == "1":
