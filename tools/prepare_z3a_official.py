@@ -8,6 +8,7 @@ import hashlib
 import importlib
 from dataclasses import asdict
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -67,6 +68,7 @@ def main():
     recipe = os.environ.get("LINGBOT_TRAIN_RECIPE", "z3a")
     if recipe not in ("z3a", "z4"):
         raise ValueError("Unknown training recipe")
+    checkpoint = Path(os.environ.get("INIT_MODEL", "/root/autodl-tmp/models/hggforget-lingbotvla-robotwin-clean-sft/global_step_20000")).resolve()
     z4_config = None
     if recipe == "z4":
         from lingbotvla.data.vla_data.z4_augmentation import load_config
@@ -80,9 +82,10 @@ def main():
         old_policy = previous.get("augmentation_policy", "z3a")
         if old_policy != recipe or (recipe == "z4" and previous.get("z4_config") != z4_config):
             raise ValueError("Existing run has a different augmentation recipe; use a new OUTPUT_DIR")
+        if previous.get("initial_checkpoint") != str(checkpoint):
+            raise ValueError("Existing run has a different initial checkpoint; use a new OUTPUT_DIR")
     if z4_config is not None:
         (launch / "z4_augmentation.yaml").write_text(yaml.safe_dump(z4_config, sort_keys=False))
-    checkpoint = Path(os.environ.get("INIT_MODEL", "/root/autodl-tmp/models/hggforget-lingbotvla-robotwin-clean-sft/global_step_20000")).resolve()
     dataset = Path(os.environ.get("DATA_ROOT", ROOT / "data/RoboTwin_lerobot_v30")).resolve()
     norm = Path(os.environ.get("NORM_FILE", checkpoint.parent / "robotwin_clean_norm.json")).resolve()
     # Start from the native Muon recipe, never from the PICA configuration.
@@ -91,7 +94,7 @@ def main():
                            tokenizer_path=str(ROOT / "evaluation/Qwen3-VL-4B-Instruct"))
     robot_dir = launch / "robot_configs"
     robot_dir.mkdir(exist_ok=True)
-    source_robot = checkpoint.parent / "launch/robot_configs/robotwin_clean.yaml"
+    source_robot = Path(os.environ.get("ROBOT_CONFIG", checkpoint.parent / "launch/robot_configs/robotwin_clean.yaml")).resolve()
     robot = yaml.safe_load(source_robot.read_text())
     robot["norm_stats"] = str(norm)
     (robot_dir / "robotwin_clean.yaml").write_text(yaml.safe_dump(robot, sort_keys=False))
@@ -114,9 +117,18 @@ def main():
                  async_save_hf_weights=False, enable_resume=True, pica_params={})
     if train["max_steps"] < 1 or train["save_steps"] < 1:
         raise ValueError("MAX_STEPS and SAVE_STEPS must be positive")
+    if not (math.isfinite(train["lr"]) and math.isfinite(train["lr_min"])
+            and 0 <= train["lr_min"] <= train["lr"] and train["lr"] > 0):
+        raise ValueError("Learning rates must be finite and satisfy 0 <= LR_MIN <= LR, LR > 0")
     # Preserve the checkpoint's depth/video auxiliary objectives and architecture settings.
-    saved = yaml.safe_load((checkpoint / "lingbotvla_cli.yaml").read_text())
-    train["align_params"] = saved["model"]["align_params"]
+    # HF-only exports may have no per-step CLI YAML. Their config.json carries
+    # the alignment architecture; do not inherit the source run's PICA loss.
+    checkpoint_config = json.loads((checkpoint / "config.json").read_text())
+    if "align_params" in checkpoint_config:
+        train["align_params"] = checkpoint_config["align_params"]
+    else:
+        saved = yaml.safe_load((checkpoint / "lingbotvla_cli.yaml").read_text())
+        train["align_params"] = saved["model"]["align_params"]
     align = train["align_params"]
     align.pop("visual_dir", None)
     align["depth"].update(moge_path=str(ROOT / "weights/depth/moge2-vitb-normal.pt"),
@@ -128,7 +140,9 @@ def main():
         "recipe": ("Z4: 10% original / 90% combined image corruptions" if recipe == "z4" else
                    "local official-data aug1 adaptation; exact upstream Z3a unverified"),
         "initial_checkpoint": str(checkpoint), "dataset": str(dataset),
+        "source_robot_config": str(source_robot), "normalization_file": str(norm),
         "optimizer": "muon", "global_batch_size": 1024,
+        "lr": train["lr"], "lr_min": train["lr_min"], "pica_alignment_enabled": False,
         "augmentation_policy": recipe,
         "augmentation_level": 0 if recipe == "z4" else 1,
         "state_noise_std": float(os.environ["LINGBOT_STATE_NOISE_STD"]),
@@ -136,6 +150,13 @@ def main():
     }
     if z4_config is not None:
         provenance["z4_config"] = z4_config
+    source_manifest = checkpoint.parent / "download_manifest.json"
+    if source_manifest.is_file():
+        source_record = json.loads(source_manifest.read_text())
+        if isinstance(source_record, dict) and source_record.get("all_files_verified"):
+            provenance["initial_checkpoint_download"] = {
+                key: source_record[key] for key in ("repo", "revision", "checkpoint")
+            }
     (launch / "recipe.json").write_text(json.dumps(provenance, indent=2) + "\n")
     print(f"Configuration: {launch / 'config.yaml'}", flush=True)
     if os.environ.get("DRY_RUN") == "1":

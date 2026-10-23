@@ -427,3 +427,53 @@ global batch 1024，输出到 `outputs/robotwin-z4-from20k-gbs1024`。
 启动前检查、相同策略恢复/不同策略拒绝，以及 3 个真实数据样本的完整图像预处理。
 实际样本检查确认原图分支逐像素一致、增广图像发生变化、动作/状态/语言/关节掩码不变。
 记录见 [`records/z4_validation_20261022.json`](records/z4_validation_20261022.json)。
+
+## PICA step 2000 → Z4 小学习率微调
+
+`train_z4_from_pica2000.sh` 从
+[`Xiaodong/lingbotvla-robotwin-clean-sft-20k-PICA/global_step_2000`](https://huggingface.co/Xiaodong/lingbotvla-robotwin-clean-sft-20k-PICA/tree/main/global_step_2000)
+的学生 HF 权重开始新一轮 Z4 微调。保留 PICA 已学到的模型参数，本轮关闭 PICA 对齐损失、
+EMA 教师及原 PICA 增广，只使用 Z4 的 10% 原图 / 90% 组合增广，状态噪声为 0。
+这属于顺序微调；能否保持 PICA 的鲁棒性收益，需要比较 clean/randomized rollout 成功率。
+
+下载器固定 revision `892824afa4cf7d77ad5d3916045d884f14d37170`，只下载 step 2000
+的 3 个模型分片、tokenizer/config，以及仓库根目录的训练配置和归一化统计，
+不会误用根目录的另一份模型权重。支持分片断点续传，LFS 文件校验 SHA-256，
+普通文件校验 Git blob 哈希，全部完成后生成 `download_manifest.json`。
+
+```bash
+cd /root/autodl-tmp/projects/lingbot-vla-v2
+/root/miniconda3/envs/lingbotvla/bin/python tools/download_pica_z4_model.py
+
+# 检查数据、模型、辅助权重与依赖，不启动训练
+CUDA_VISIBLE_DEVICES=0,1 CHECK_ONLY=1 \
+  bash experiment/robotwin/train_z4_from_pica2000.sh
+
+# GPU 可用后启动；默认新增 1000 步，每 100 步保存
+CUDA_VISIBLE_DEVICES=0,1 MICRO_BATCH_SIZE=32 \
+  LR=1e-5 LR_MIN=5e-6 MAX_STEPS=1000 SAVE_STEPS=100 \
+  bash experiment/robotwin/train_z4_from_pica2000.sh
+```
+
+- 初始权重：`/root/autodl-tmp/models/Xiaodong-lingbotvla-robotwin-clean-sft-20k-PICA/global_step_2000`。
+- 数据：本机已验证的 `data/RoboTwin_lerobot_v30`，2500 episodes；使用下载的
+  `robotwin_clean_norm.json`，其内容与 20k clean 基线一致。
+- HF 仓库未附机器人映射 YAML；使用仓库内 `configs/robot_configs/robotwin.yaml`，
+  其动作/状态切片、相机映射与 20k clean 基线一致。可用 `ROBOT_CONFIG` 覆盖。
+- Muon、cosine 学习率 `1e-5 → 5e-6`、无 warmup、关闭额外 MoE 专家学习率倍率。
+  该学习率是本次微调的起点，低于来源训练配置和现有 Z4 的 `1e-4 → 5e-5`。
+- 双卡每卡 batch 32、梯度累积 16、global batch 1024；也可每卡 64 / 累积 8。
+  每卡 48 无法整除 1024，启动器会拒绝。
+- 初次运行新建优化器和调度器，步数从 0 开始；没有恢复来源 PICA 的 optimizer/EMA。
+  后续从本轮独立输出目录的完整 checkpoint 自动续训。
+- 输出：`outputs/robotwin-z4-from-pica2000-gbs1024`；日志 `train.log`，
+  HF 权重 `checkpoints/global_step_<本轮步数>/hf_ckpt`。
+  不要复用已有 `robotwin-z4-from20k-gbs1024`；启动器会拒绝不同初始权重的目录续训。
+
+`INIT_MODEL`、`NORM_FILE`、`OUTPUT_DIR`、`LR`、`LR_MIN`、`MAX_STEPS`、`SAVE_STEPS`
+均可通过环境变量覆盖。HF 导出缺少每步 `lingbotvla_cli.yaml` 时，从该步 `config.json`
+读取深度/未来视觉辅助分支配置，并将辅助模型路径改成本机已有权重。
+
+验证记录见 [`records/z4_from_pica2000_validation_20261023.json`](records/z4_from_pica2000_validation_20261023.json)：
+16 个文件哈希校验、5 项回归测试、原生配置解析、1708 个张量的模型键名/形状匹配、
+2 个真实数据样本预处理和完整启动预检查通过。未执行新训练的 GPU 前反向测试。

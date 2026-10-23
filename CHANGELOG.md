@@ -1,5 +1,15 @@
 # 修改日志
 
+## 2026-10-23
+
+### 从 PICA step 2000 进行 Z4 小学习率微调
+
+- 新增 `tools/download_pica_z4_model.py`，固定 Hugging Face 仓库 `Xiaodong/lingbotvla-robotwin-clean-sft-20k-PICA` 的 revision `892824afa4cf7d77ad5d3916045d884f14d37170`，下载 `global_step_2000` HF 权重及配套元数据，支持断点续传和 SHA-256 / Git blob 校验，避免下载根目录的其他模型权重。
+- 新增 `experiment/robotwin/train_z4_from_pica2000.sh`：从 PICA 学生权重初始化，仅用 Z4 进行顺序微调，关闭 PICA 对齐与 EMA；默认 Muon、学习率 `1e-5 → 5e-6`、双卡 `32 × 2 × 16 = 1024`、新增 1000 步、每 100 步保存，使用独立输出目录。
+- 公共配置生成器支持从 HF `config.json` 读取辅助分支配置，无需权重子目录内存在 `lingbotvla_cli.yaml`；支持 `ROBOT_CONFIG` 显式指定映射，记录初始化来源与学习率，并阻止已有 checkpoint 的输出目录切换初始权重。
+- 新增配置生成回归测试，覆盖 HF-only 初始化、关闭 PICA、保留辅助架构、续训来源与策略隔离、旧 CLI 配置兼容以及学习率校验。新增 README 下载、预检查和训练命令。
+- 本机已完成 16 个文件下载和哈希校验；5 项回归测试、原生配置解析、1708 个 checkpoint 张量的 meta 模型键名/形状匹配、2 个真实数据样本预处理及新旧启动器预检查通过。验证记录见 [`experiment/robotwin/records/z4_from_pica2000_validation_20261023.json`](experiment/robotwin/records/z4_from_pica2000_validation_20261023.json)；未启动新训练或执行 GPU 前反向测试。
+
 ## 2026-10-22
 
 ### Z4 在线随机组合增广
