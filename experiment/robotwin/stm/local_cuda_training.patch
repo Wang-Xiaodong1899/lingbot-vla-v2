@@ -1,0 +1,122 @@
+--- a/src/tasks/vla/train_lingbotvla.py
++++ b/src/tasks/vla/train_lingbotvla.py
+@@ -118,6 +118,8 @@
+ 
+ @dataclass
+ class MyTrainingArguments(TrainingArguments):
++    save_interval_seconds: int = field(default=7200, metadata={"help": "Wall time between checkpoints, checked at optimizer-step boundaries; 0 disables."})
++    verify_save_step: int = field(default=3, metadata={"help": "Early checkpoint to verify saving; 0 disables."})
+     muon_cpu_offload: bool = field(default=False, metadata={"help": "Keep Muon momentum on CPU; single-device training only."})
+     adamw_cpu_offload: bool = field(default=False, metadata={"help": "Keep AdamW states on CPU and chunk elementwise updates; single-device only."})
+     cpu_num_threads: Optional[int] = field(default=None, metadata={"help": "Bound PyTorch CPU compute threads to the worker quota."})
+@@ -611,6 +613,8 @@
+         save_model_assets(args.train.model_assets_dir, model_assets)
+ 
+     start_epoch, start_step, global_step = 0, 0, 0
++    last_checkpoint_time = time.monotonic()
++    last_saved_step = -1
+     current_epoch_for_eval, current_epoch_step_for_eval = 1, 0
+     save_checkpoint_path = None
+     hf_failure_log_path = (
+@@ -705,7 +709,7 @@
+                 logger.info_rank0(f"Failed to load checkpoint {cp}: {repr(e)}. Trying older one...")
+                 continue
+         if not loaded:
+-            logger.info_rank0("Starting training from scratch. No valid checkpoint could be loaded.")
++            raise RuntimeError("Existing checkpoints could not be loaded; refusing to silently restart training.") from last_err
+     else:
+         logger.info_rank0("Starting training from scratch.")
+ 
+@@ -933,7 +937,9 @@
+                             grad = grad.to_local()
+                         sums[bucket] += grad.float().abs().sum()
+                 dist.all_reduce(sums)
+-                if not torch.isfinite(sums).all() or sums[0] <= 0 or sums[2] <= 0:
++                vision_ok = sums[2] == 0 if args.train.freeze_vision_encoder else sums[2] > 0
++                body_ok = global_step <= 1 or sums[1] > 0
++                if not torch.isfinite(sums).all() or sums[0] <= 0 or not vision_ok or not body_ok:
+                     raise RuntimeError(f"STM/ViT gradient audit failed: {sums}")
+                 logger.info_rank0(f"STM_GRAD_AUDIT step={global_step} up,body,vit={sums.tolist()}")
+                 logger.info_rank0(f"CUDA_PEAK_GIB allocated={torch.cuda.max_memory_allocated()/2**30:.3f} reserved={torch.cuda.max_memory_reserved()/2**30:.3f}")
+@@ -1130,7 +1136,14 @@
+                                     current_pred_feats=future_video_current_preds,
+                                 )
+ 
+-            if args.train.save_steps and global_step % args.train.save_steps == 0:
++            # Rank 0 owns the timer; all ranks must enter DCP collectively.
++            save_due = torch.tensor(int(args.train.global_rank == 0 and (
++                (args.train.save_steps and global_step % args.train.save_steps == 0)
++                or (args.train.save_interval_seconds > 0 and time.monotonic() - last_checkpoint_time >= args.train.save_interval_seconds)
++                or (args.train.verify_save_step > 0 and global_step == args.train.verify_save_step)
++            )), device="cuda", dtype=torch.int32)
++            dist.broadcast(save_due, src=0)
++            if save_due.item():
+                 helper.empty_cache()
+                 save_checkpoint_path = os.path.join(args.train.save_checkpoint_path, f"global_step_{global_step}")
+                 
+@@ -1168,6 +1181,9 @@
+                     current_epoch_for_eval,
+                     current_epoch_step_for_eval,
+                 )
++                dist.barrier()
++                last_checkpoint_time = time.monotonic()
++                last_saved_step = global_step
+ 
+             if args.train.max_steps is not None and global_step >= args.train.max_steps:
+                 logger.info_rank0(f"Reached max_steps={args.train.max_steps}, stopping training.")
+@@ -1181,7 +1197,7 @@
+         start_step = 0
+         helper.print_device_mem_info(f"VRAM usage after epoch {epoch + 1}")
+         if reached_max_steps:
+-            already_saved = args.train.save_steps and global_step % args.train.save_steps == 0
++            already_saved = last_saved_step == global_step
+             if not already_saved:
+                 helper.empty_cache()
+                 save_checkpoint_path = os.path.join(args.train.save_checkpoint_path, f"global_step_{global_step}")
+--- a/src/lingbotvla/checkpoint/checkpointer.py
++++ b/src/lingbotvla/checkpoint/checkpointer.py
+@@ -311,7 +311,7 @@
+                 state_dict={"state": ModelState(state["model"])},
+                 storage_writer=FileSystemWriter(
+                     model_dir,
+-                    thread_count=16,
++                    thread_count=int(os.environ.get('LINGBOT_DCP_THREADS', '1')),
+                     single_file_per_rank=True,
+                     sync_files=False,
+                 ),
+@@ -322,7 +322,7 @@
+                     state_dict={"state": ModelState(state["ema"])},
+                     storage_writer=FileSystemWriter(
+                         ema_dir,
+-                        thread_count=16,
++                        thread_count=int(os.environ.get('LINGBOT_DCP_THREADS', '1')),
+                         single_file_per_rank=True,
+                         sync_files=False,
+                     ),
+@@ -333,7 +333,7 @@
+                     state_dict={"state": OptimizerState(model=state["model"], optimizer=state["optimizer"])},
+                     storage_writer=FileSystemWriter(
+                         optimizer_dir,
+-                        thread_count=16,
++                        thread_count=int(os.environ.get('LINGBOT_DCP_THREADS', '1')),
+                         single_file_per_rank=True,
+                         sync_files=False,
+                     ),
+@@ -346,7 +346,7 @@
+                     tmp_path.unlink()  # remove .metadata.tmp
+                 return FileSystemWriter(
+                     output_dir,
+-                    thread_count=16,
++                    thread_count=int(os.environ.get('LINGBOT_DCP_THREADS', '1')),
+                     single_file_per_rank=True,
+                     sync_files=False,
+                 )
+@@ -369,7 +369,7 @@
+                     state_dict={"state": OptimizerState(model=state["model"], optimizer=state["optimizer"])},
+                     storage_writer=FileSystemWriter(
+                         optimizer_dir,
+-                        thread_count=16,
++                        thread_count=int(os.environ.get('LINGBOT_DCP_THREADS', '1')),
+                         single_file_per_rank=True,
+                         sync_files=False,
+                     ),

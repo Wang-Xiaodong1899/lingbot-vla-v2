@@ -1,0 +1,7 @@
+{
+  "src/tasks/vla/train_lingbotvla.py": "de3cb3cc676d6025d143bce9f08148910e33cc68ac9f315d6ae6b369d3d7dae3",
+  "src/lingbotvla/checkpoint/checkpointer.py": "227f22dac32e051ac51ed327fb2ebc26f845b80bb502c5e09836d1aa363a6b20",
+  "prepare_training.py": "b4877b012fd600e63c3da5b8418ad25cae88d76faaf368597faff609f9936a06",
+  "train_stm_from20k.sh": "a27b6cf77ff22709863e7a268b9c27316b7364541f8ff218123f63ce0779ddf0",
+  "verify_checkpoint.py": "9aab18ba80d0cb10da38d77a491e1ed42fab8f9e14992104f781ccc544a66741"
+}

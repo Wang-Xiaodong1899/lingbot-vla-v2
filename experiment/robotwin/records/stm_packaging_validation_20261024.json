@@ -1,0 +1,12 @@
+{
+  "checked_at_utc": "2026-10-24T02:02:49.108886+00:00",
+  "source_snapshot_files": 337,
+  "source_matches_live_training": true,
+  "unit_tests_passed": 18,
+  "package_launcher_check_only_passed": true,
+  "global_batch_size": 512,
+  "micro_batch_size": 16,
+  "gradient_accumulation_steps": 16,
+  "gpu_count": 2,
+  "active_training_unchanged": true
+}

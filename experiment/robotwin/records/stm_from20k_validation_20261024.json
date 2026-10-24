@@ -1,0 +1,79 @@
+{
+  "checked_at_utc": "2026-10-23T16:35:44.680515+00:00",
+  "source_repo": "zhuojianli/icm",
+  "source_revision": "6cae6fc54d004c34b573cdb486c1beb9762f1c2c",
+  "downloaded_verified_files": 377,
+  "unit_tests": {
+    "passed": 18,
+    "failed": 0
+  },
+  "output_dir": "/root/autodl-tmp/projects/lingbot-vla-stm/outputs/stm-from20k-gbs512",
+  "initial_checkpoint": "/root/autodl-tmp/models/hggforget-lingbotvla-robotwin-clean-sft/global_step_20000",
+  "global_batch_size": 512,
+  "micro_batch_size": 16,
+  "gpu_count": 2,
+  "gradient_accumulation_steps": 16,
+  "optimizer": "muon",
+  "lr": 0.0001,
+  "lr_min": 5e-05,
+  "expert_lr_scale": 2.8284271247461903,
+  "max_steps": 4000,
+  "save_interval_seconds": 7200,
+  "save_steps": 1000,
+  "verify_save_step": 3,
+  "steps_observed": [
+    {
+      "step": 1,
+      "epoch": 1,
+      "loss": 0.0253,
+      "grad_norm": 0.3725,
+      "compute_step_seconds": 69.833
+    },
+    {
+      "step": 2,
+      "epoch": 1,
+      "loss": 0.0284,
+      "grad_norm": 1.0048,
+      "compute_step_seconds": 51.098
+    },
+    {
+      "step": 3,
+      "epoch": 1,
+      "loss": 0.0224,
+      "grad_norm": 0.3409,
+      "compute_step_seconds": 51.432
+    },
+    {
+      "step": 4,
+      "epoch": 1,
+      "loss": 0.0272,
+      "grad_norm": 0.9564,
+      "compute_step_seconds": 57.415
+    },
+    {
+      "step": 5,
+      "epoch": 1,
+      "loss": 0.0245,
+      "grad_norm": 0.4756,
+      "compute_step_seconds": 46.193
+    }
+  ],
+  "checkpoint_verified": "/root/autodl-tmp/projects/lingbot-vla-stm/outputs/stm-from20k-gbs512/checkpoints/global_step_3/verification.json",
+  "checkpoint_hf_shards": 3,
+  "checkpoint_stm_parameters": 11,
+  "resume_verified": true,
+  "resumed_from_step": 3,
+  "latest_completed_step": 5,
+  "running_torchrun_pid": 353008,
+  "running_worker_pids": [
+    353013,
+    353014
+  ],
+  "gpu_status": [
+    "0, NVIDIA A800-SXM4-80GB, 71743 MiB, 99 %",
+    "1, NVIDIA A800-SXM4-80GB, 71743 MiB, 97 %"
+  ],
+  "cgroup_memory_events": "low 0\nhigh 864775\nmax 0\noom 0\noom_kill 0\n",
+  "limitation": "Formal H20 CLI is unpublished; only global batch, max steps and step-save interval are known formal settings. Other hyperparameters use published initial candidate.",
+  "training_left_running": true
+}

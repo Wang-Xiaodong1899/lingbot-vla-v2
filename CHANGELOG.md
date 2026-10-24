@@ -1,5 +1,17 @@
 # 修改日志
 
+## 2026-10-24
+
+### 基于 HF STM 源码从 clean SFT 20k 训练
+
+- 纳入实际使用的独立 STM 源码快照（337 个文件，保留许可证）、18 项测试、候选配置、CUDA 修改补丁及源码 SHA-256 清单；仓库入口支持现有训练目录续训和新 checkout 启动，资产根目录、Python 与初始模型路径可配置。详见 `experiment/robotwin/stm/README.md`。
+
+- 下载 `zhuojianli/icm` revision `6cae6fc54d004c34b573cdb486c1beb9762f1c2c` 的全部 377 个文件并校验，原件位于 `/root/autodl-tmp/projects/icm`；独立工作副本位于 `/root/autodl-tmp/projects/lingbot-vla-stm`。
+- 新增 `experiment/robotwin/train_stm_from20k.sh` 入口：指定 clean SFT step 20000 初始化、官方 RoboTwin v3 数据、STM 当前/历史融合、Muon、global batch 512、4000 步。正式 H20 完整配置未公开，学习率 `1e-4 → 5e-5` 及其余参数明确采用公开的 initial_candidate，详见独立目录的 README 和 provenance.json。
+- 每 1000 步或约 2 小时保存完整训练状态及 HF 权重，第 3 步提前验证写盘；使用双卡统一定时、限制 DCP 写盘线程、校正冻结 ViT 时的梯度审计，并禁止恢复失败后静默重头训练。
+- 提供的 18 项 STM/缓存测试通过；真实双卡训练完成前 3 步后成功写出 DCP 模型、Muon 优化器、每卡训练状态及 3 个 HF 分片，校验 11 个 STM 参数有效且已更新。实际从 step 3 恢复后完成 step 4，loss/梯度有限、无 OOM，训练保持后台运行。验证记录见 `experiment/robotwin/records/stm_from20k_validation_20261024.json` 和独立输出目录的 `validation.json`。
+
+
 ## 2026-10-23
 
 ### 从 PICA step 2000 进行 Z4 小学习率微调
