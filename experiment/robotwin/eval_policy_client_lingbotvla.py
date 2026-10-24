@@ -12,6 +12,8 @@ import numpy as np
 from pathlib import Path
 from collections import deque
 import traceback
+import copy
+import time
 
 import yaml
 from datetime import datetime
@@ -23,6 +25,11 @@ from generate_episode_instructions import *
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
+
+
+def temporal_capture_required(step, chunk_end):
+    """Keep every possible future t-8/t-15 frame, including current t."""
+    return step >= chunk_end - 15
 
 
 def class_decorator(task_name):
@@ -311,9 +318,38 @@ def eval_policy(task_name,
         ret = model.infer(dict(reset = True, robo_name=usr_args['robo_name'], path_to_pi_model=path_to_pi_model,
                                episode_seed=now_seed))
         executed_count = 0
-        
+        # Opt in only for STM checkpoints; ordinary policy input stays unchanged.
+        temporal_enabled = os.environ.get('ROBOTWIN_TEMPORAL_MEMORY') == '1'
+        temporal_frames = deque(maxlen=32)
+        # Skipping get_obs would change random-light RNG draws and video output.
+        temporal_sparse = (
+            temporal_enabled
+            and not args['domain_randomization'].get('crazy_random_light', False)
+            and not args.get('eval_video_log', False)
+        )
+        cached_observation = None
+        print(f'STM_CAPTURE mode={"tail16" if temporal_sparse else "dense"}', flush=True)
+
+        def record_temporal_frame(obs):
+            frame = {
+                'observation.images.cam_high': obs['observation']['head_camera']['rgb'],
+                'observation.images.cam_left_wrist': obs['observation']['left_camera']['rgb'],
+                'observation.images.cam_right_wrist': obs['observation']['right_camera']['rgb'],
+                'observation.state': obs['joint_action']['vector'],
+                'task': TASK_ENV.get_instruction(),
+                'timestamp': TASK_ENV.take_action_cnt / 15.,
+                'episode_id': str(now_seed), 'stream_id': 'default',
+            }
+            frame = copy.deepcopy(frame)
+            if temporal_frames and temporal_frames[-1]['timestamp'] == frame['timestamp']:
+                temporal_frames.pop()
+            temporal_frames.append(frame)
+            return frame
+
         while TASK_ENV.take_action_cnt<TASK_ENV.step_lim and not succ:
-            observation = TASK_ENV.get_obs()
+            observation = (cached_observation if temporal_sparse and cached_observation is not None
+                           else TASK_ENV.get_obs())
+            cached_observation = None
             # from IPython import embed;embed()
             
             formatted_observation = {
@@ -342,9 +378,25 @@ def eval_policy(task_name,
             # ========= debug image =========
 
             # from IPython import embed;embed()
+            if temporal_enabled:
+                current = record_temporal_frame(observation)
+                history = []
+                for offset in (.5, 1.):
+                    target = current['timestamp'] - offset
+                    old = next((f for f in reversed(temporal_frames)
+                                if f['timestamp'] <= target + 1e-7), None)
+                    if old is not None and target - old['timestamp'] > .1 + 1e-7:
+                        old = None
+                    history.append(old)
+                formatted_observation.update(current, history_observations=history)
             ret = model.infer(formatted_observation) #(TASK_ENV, model, observation)
             action, latency = ret['action'], ret['server_timing']
             executed_count = 0
+            capture_seconds = 0.
+            capture_count = 0
+            execution_started = time.perf_counter()
+            chunk_size = len(action) if len(action.shape) == 2 else 1
+            chunk_end = min(TASK_ENV.take_action_cnt + chunk_size, TASK_ENV.step_lim)
             if len(action.shape) == 2:
                 initial_obs = False
                 for act in action:
@@ -357,15 +409,30 @@ def eval_policy(task_name,
                         initial_obs = True
                     TASK_ENV.take_action(act)
                     executed_count += 1
+                    if (temporal_enabled and not TASK_ENV.eval_success
+                            and (not temporal_sparse or temporal_capture_required(TASK_ENV.take_action_cnt, chunk_end))):
+                        capture_started = time.perf_counter()
+                        cached_observation = TASK_ENV.get_obs()
+                        record_temporal_frame(cached_observation)
+                        capture_seconds += time.perf_counter() - capture_started
+                        capture_count += 1
                     if TASK_ENV.eval_success:
                         succ = True
                         break
             else:
                 TASK_ENV.take_action(action)
                 executed_count = 1
+                if temporal_enabled and not TASK_ENV.eval_success:
+                    capture_started = time.perf_counter()
+                    cached_observation = TASK_ENV.get_obs()
+                    record_temporal_frame(cached_observation)
+                    capture_seconds += time.perf_counter() - capture_started
+                    capture_count += 1
                 if TASK_ENV.eval_success:
                     succ = True
             
+            if temporal_enabled:
+                print(f'STM_CAPTURE steps={executed_count} captures={capture_count} capture_s={capture_seconds:.3f} execution_s={time.perf_counter()-execution_started:.3f}', flush=True)
             print(f"infer time {latency}")
 
 
