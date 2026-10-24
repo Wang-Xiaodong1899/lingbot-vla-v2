@@ -64,6 +64,7 @@ enable_video=True
 keep_inference=false
 enable_video=False
 task_config="${TASK_CONFIG:-demo_clean}"
+instruction_type="${INSTRUCTION_TYPE:-unseen}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -85,6 +86,7 @@ while [[ $# -gt 0 ]]; do
         --use_compile)       use_compile="$2";     shift 2 ;;
         --robo_name)         robo_name="$2";         shift 2 ;;
         --task_config)       task_config="$2";       shift 2 ;;
+        --instruction_type)  instruction_type="$2";  shift 2 ;;
         --video_fps)         video_fps="$2";         shift 2 ;;
         --no_video)          enable_video=False;     shift ;;
         --keep_inference)    keep_inference=true;    shift ;;
@@ -114,6 +116,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --use_compile       enable model compile (default: True)"
             echo "  --robo_name         robot config name (default: robotwin)"
             echo "  --task_config       RoboTwin task config (default: demo_clean)"
+            echo "  --instruction_type  seen or unseen instructions (default: unseen)"
             echo "  --keep_inference    keep inference servers resident after simulation"
             echo "  --video_fps         video recording fps (default: 10)"
             echo "  --no_video          disable video recording to speed up simulation"
@@ -212,6 +215,10 @@ if ! [[ "$num_tasks" =~ ^[1-9][0-9]*$ ]] || [ "$num_tasks" -gt 50 ]; then
 fi
 
 # ===== Sim-side args =====
+if [[ "$instruction_type" != seen && "$instruction_type" != unseen ]]; then
+    echo "Error: --instruction_type must be seen or unseen"
+    exit 1
+fi
 policy_name=ACT
 train_config_name=0
 seed=0
@@ -281,6 +288,9 @@ if [ -z "$_exp_name" ]; then
 fi
 _step_num=$(echo "$model_path" | grep -oP 'global_step_\K\d+')
 _step_k=$(( _step_num / 1000 ))k
+if [ -n "$_step_num" ] && [ $(( _step_num % 1000 )) -ne 0 ]; then
+    _step_k="step${_step_num}"
+fi
 if [ -n "$resume_from" ] && [[ "${resume_from##*/}" != "${_exp_name}_${_step_k}_${task_config}_"* ]]; then
     echo "Error: previous run does not match this checkpoint and task config"
     exit 1
@@ -294,6 +304,10 @@ eval_pid_file="${run_dir}/eval_pids.txt"
 > "$eval_pid_file"
 stats_file="${run_dir}/stats.txt"
 echo -e "\033[36mRun directory: ${run_dir}\033[0m"
+printf 'model_path=%s\ntask_config=%s\ninstruction_type=%s\nnum_tasks=%s\nnum_episodes=%s\nseed=%s\nuse_fp32=%s\nuse_bf16=%s\nuse_compile=%s\nuse_length=%s\n' \
+    "$model_path" "$task_config" "$instruction_type" "$num_tasks" "$num_episodes" \
+    "$seed" "$use_fp32" "$use_bf16" "$use_compile" "$use_length" \
+    > "${run_dir}/evaluation_settings.txt"
 
 # Result collection arrays
 declare -a result_task_names=()
@@ -506,6 +520,7 @@ launch_task() {
         --overrides \
         --task_name ${task_name} \
         --task_config ${task_config} \
+        --instruction_type ${instruction_type} \
         --num_episodes ${num_episodes} \
         --train_config_name ${train_config_name} \
         --seed ${seed} \
@@ -668,6 +683,7 @@ echo -e "\033[36mGenerating stats file: ${stats_file}\033[0m"
     echo "  Tasks: ${num_tasks}"
     echo "  Episodes per task: ${num_episodes}"
     echo "  Task Config: ${task_config}"
+    echo "  Instruction Type: ${instruction_type}"
     echo "  Inference: ${num_gpus} GPU x ${num_per_gpu}/GPU = ${num_slots} slots"
     echo "  Precision: use_bf16=${use_bf16}, use_fp32=${use_fp32}, use_compile=${use_compile}"
     echo "  Result: $((completed + reused_tasks)) done (${reused_tasks} reused), ${skipped} skipped"

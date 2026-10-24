@@ -60,3 +60,33 @@ STM_WORK_DIR="$PWD/experiment/robotwin/stm" bash experiment/robotwin/train_stm_f
 在无界面、无视频、无动态灯光且不保存数据的评测中，只在真正采图前同步相机/渲染场景，保留所有物理步和成功检查；提前成功触发的 `get_obs()` 也会正常同步。STM 采图省略未使用的相机标定/末端位姿元数据和 `now_obs` 全量复制，入历史缓冲时仍保留独立快照，段尾快照直接复用。视频、界面、动态灯光及数据保存模式回退到原始同步/采图路径；非 STM 评测保持原路径。设置 `ROBOTWIN_STM_FAST_OBSERVATIONS=0` 可关闭渲染同步/观测复制优化，保留上一版末尾 16 帧采样以做对照。
 
 验证：`python -m unittest discover -s tests -p 'test_robotwin_*' -v`。真实 SAPIEN 渲染一致性检查：使用 RoboTwin 环境执行 `python tools/validate_stm_render_sync.py`，默认读取 `evaluation/RoboTwin` 的实际观测/RGB转换代码，在移动刚体和三路相机的小场景中比较物理状态、像素及提前成功采图。该场景的耗时不能用作完整 RoboTwin 任务的提速承诺。
+
+
+### STM + AutoHorizon 推理入口
+
+使用主仓库的 `deploy/lingbot_vla_stm_autohorizon_policy.py`。它选择本目录 `src/` 的 STM 模型/时序缓存实现，复用主仓库 AutoHorizon 注意力采集与动作长度选择，不会忽略 STM 权重。推理使用 FP32、eager attention，关闭 compile。
+
+在仓库根目录，准备与 checkpoint 匹配的训练 YAML（含 `temporal_memory: true` 的模型配置、数据预处理和 normalization 路径）。`QWEN3VL_PATH` 指向 Qwen3-VL processor/tokenizer，`LINGBOT_TRAIN_CONFIG` 指向该 YAML；如 YAML 的词表大小与 checkpoint 不符，应使用匹配值或 `vocab_size: 0` 从 Qwen 配置读取，不能跳过权重严格加载。checkpoint 上级目录放置配套 `robotwin_clean_norm.json`。
+
+```bash
+export QWEN3VL_PATH=/path/to/Qwen3-VL-4B-Instruct
+export LINGBOT_TRAIN_CONFIG=/path/to/matching/lingbotvla_cli.yaml
+export ROBOTWIN_TEMPORAL_MEMORY=1
+
+# 在推理环境先校验 STM 历史、注意力采集与动作截断。
+python tools/smoke_stm_autohorizon.py --model-path /path/to/hf_ckpt
+
+# clean(seen)，50 个任务各 10 回合，每卡 2 路。
+bash experiment/robotwin/start_robotwin_infer_and_eval.sh \
+  --model_path /path/to/hf_ckpt \
+  --inference_script deploy/lingbot_vla_stm_autohorizon_policy.py \
+  --eval_workdir /path/to/RoboTwin \
+  --output_base /path/to/results \
+  --conda_sh /path/to/miniconda3/etc/profile.d/conda.sh \
+  --inference_env lingbotvla --sim_env RoboTwin \
+  --num_gpus 2 --num_per_gpu 2 --num_tasks 50 --num_episodes 10 \
+  --task_config demo_clean --instruction_type seen \
+  --use_bf16 False --use_fp32 True --use_compile False --no_video
+```
+
+校验脚本使用合成当前/历史观测，检查严格权重加载、有效历史、36 层注意力（由模型配置校验）、参考 MoE 下动作一致性及生产路径动作前缀截断。它不代替 RoboTwin 成功率评测。生产 MoE 重复前向可能存在原子累加引起的数值微差，脚本会单独报告。

@@ -281,6 +281,7 @@ the full run.
 | `--use_length` | action-chunk length forwarded to the policy (default 50) |
 | `--robo_name` | robot config name (default `robotwin`) |
 | `--task_config` | RoboTwin setting: `demo_clean` or `demo_randomized` |
+| `--instruction_type` | instruction split: `seen` or `unseen` (default `unseen`); pass `seen` explicitly for clean/seen evaluation |
 | `--num_episodes` | episodes per task (default 100); use 10 for a quick 50-task evaluation |
 | `--resume_from` | previous run directory; reuse tasks with all requested episodes and a final result, rerun partial tasks |
 | `--use_bf16` / `--use_fp32` | inference precision; release reproduction uses `False` / `True` |
