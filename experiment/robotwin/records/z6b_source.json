@@ -1,0 +1,13 @@
+{
+  "reference_repo": "lingbot-vla",
+  "reference_revision": "746c647713cc2ed0dcfc7581b80f3a0e84b4088f",
+  "source_sha256": {
+    "patches/FULL_vs_be969b8.diff": "ab51be891332a8b26532d0779ee63692cb93ba2452a3cd31eb2653e47c167564",
+    "patches/aug5_whitelist.py": "db8fb16c3fa7d45254aa493802a797c1bf79ecc9951be563b6aaf95af00b7dd1",
+    "tools/train_z6b.sh": "308a669c2cce5057fd2acd3e45e26cff40cf187385c0adeed010387152f9538f",
+    "recipes/Z6b_20k_aug5_500.md": "c7a7be1fe852639284e2c90f539bfd4427078b27121442f6e2b36a503acb81af",
+    "data/official_instruction_pool_v1.json.gz": "dde3be077ffcf8448452f1a779a64e299bfe6aed05488bce59eb3bf5e61ed505"
+  },
+  "augmentation": "level 5: exact reference helpers and whitelist body",
+  "initialization": "explicit PICA1300 HF weights; fresh optimizer; PICA distillation disabled"
+}

@@ -417,6 +417,10 @@ class FeatureTransform:
         actions = prepare_action(batch_dict, self.model_config.max_action_dim)
         return_image_grid_thw = getattr(self.model_config, "return_image_grid_thw", False)
         pica_enabled = bool(getattr(self.model_config, "pica_params", {})) and not policy_eval
+        if os.environ.get("LINGBOT_AUG_POLICY") == "z6b" and not policy_eval:
+            from .transform import get_visual_aug_level
+            if pica_enabled or not self.image_augment or get_visual_aug_level() != 5:
+                raise ValueError("Z6b requires image_augment=True, level 5 and PICA distillation disabled")
         z4_enabled = os.environ.get("LINGBOT_AUG_POLICY", "") == "z4" and not policy_eval
         if z4_enabled:
             if pica_enabled or self.disabled_image_features:

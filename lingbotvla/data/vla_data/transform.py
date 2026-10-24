@@ -357,20 +357,25 @@ def apply_visual_augmentation(
     if image.max() > 1.0:
         image = image / 255.0
 
-    brightness = params["brightness"].to(device=image.device, dtype=image.dtype)
-    contrast = params["contrast"].to(device=image.device, dtype=image.dtype)
-    saturation = params["saturation"].to(device=image.device, dtype=image.dtype)
-    image = image * brightness
-    mean = image.mean(dim=[1, 2, 3], keepdim=True)
-    image = (image - mean) * contrast + mean
-    gray = image.mean(dim=1, keepdim=True)
-    image = gray + (image - gray) * saturation
-    image = image.clamp(0.0, 1.0)
-
     level = get_visual_aug_level()
-    if level > 0 and "seed" in params:
-        image = extended_visual_augmentation(image, params, view_key, level)
+    if level == 5:
+        # Level 5 owns its photometric pipeline, including the 10% clean branch.
+        # Never apply the default colour jitter before the whitelist recipe.
+        from .z6b_augmentation import whitelist_visual_augmentation
+        image = whitelist_visual_augmentation(image, params, view_key)
+    else:
+        brightness = params["brightness"].to(device=image.device, dtype=image.dtype)
+        contrast = params["contrast"].to(device=image.device, dtype=image.dtype)
+        saturation = params["saturation"].to(device=image.device, dtype=image.dtype)
+        image = image * brightness
+        mean = image.mean(dim=[1, 2, 3], keepdim=True)
+        image = (image - mean) * contrast + mean
+        gray = image.mean(dim=1, keepdim=True)
+        image = gray + (image - gray) * saturation
+        image = image.clamp(0.0, 1.0)
 
+        if level > 0 and "seed" in params:
+            image = extended_visual_augmentation(image, params, view_key, level)
     if orig_dtype == torch.uint8:
         image = (image * 255.0).round().to(torch.uint8)
     else:

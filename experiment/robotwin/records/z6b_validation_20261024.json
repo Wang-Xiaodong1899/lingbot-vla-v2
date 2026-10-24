@@ -1,0 +1,33 @@
+{
+  "reference_parity_cases": 150,
+  "reference_parity": "bitwise exact on CPU with matched global RNG; 50 seeds, 3 views, 3-frame clips",
+  "formal_training_started": false,
+  "validated_at": "2026-10-24T09:01:09.071317+00:00",
+  "unit_tests": {
+    "z6b": 9,
+    "existing_B_augmentation": 5,
+    "existing_Z4_augmentation": 10,
+    "existing_PICA_Z4_prepare": 5,
+    "total": 29
+  },
+  "check_only": {
+    "passed": true,
+    "initial_hf_checkpoint_used_for_asset_check": "/root/autodl-tmp/models/lingbotvla-robotwin-clean-sft-20k-PICA",
+    "checkpoint_step_verified_as_1300": false,
+    "global_batch_size": 2048,
+    "micro_batch_size": 8,
+    "accumulation": 128,
+    "visible_gpus": 2,
+    "enable_fp32": true,
+    "image_augment": true,
+    "pica_params": {},
+    "lr": 0.0001,
+    "lr_min": 5e-05,
+    "lr_decay_ratio": 2.0,
+    "assets": "official dataset, norm, processor, auxiliary teachers, HF shards, dependencies checked"
+  },
+  "limitations": [
+    "PICA1300 weights must be explicitly supplied for the actual run",
+    "No GPU training or PICA1300 convergence/evaluation test performed"
+  ]
+}

@@ -149,6 +149,10 @@ class LeRobotDataset(BaseLeRobotDataset):
         # Add task as a string
         task_idx = item["task_index"].item()
         item["task"] = _get_task_name(self.meta.tasks, task_idx)
+        pool_path = os.environ.get("LINGBOT_INSTRUCTION_POOL")
+        if pool_path:
+            from .instruction_pool import sample_seen_instruction
+            item["task"] = sample_seen_instruction(pool_path, ep_idx)
 
         return item
 

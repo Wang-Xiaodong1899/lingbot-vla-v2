@@ -478,3 +478,8 @@ CUDA_VISIBLE_DEVICES=0,1 MICRO_BATCH_SIZE=32 \
 验证记录见 [`records/z4_from_pica2000_validation_20261023.json`](records/z4_from_pica2000_validation_20261023.json)：
 16 个文件哈希校验、5 项回归测试、原生配置解析、1708 个张量的模型键名/形状匹配、
 2 个真实数据样本预处理和完整启动预检查通过。未执行新训练的 GPU 前反向测试。
+
+
+## Z6b level-5 augmentation from PICA1300
+
+See [Z6B.md](Z6B.md) for the reference whitelist augmentation, v1 seen instruction pool, configuration checks, and `train_z6b_from_pica1300.sh` entrypoint. Initial HF weights must be specified explicitly; this stage uses a fresh Muon optimizer and disables PICA distillation.
