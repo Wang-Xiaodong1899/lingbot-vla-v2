@@ -32,6 +32,64 @@ def temporal_capture_required(step, chunk_end):
     return step >= chunk_end - 15
 
 
+def stm_observation_fastpath_allowed(env):
+    """Only headless evaluation without render-dependent side effects."""
+    return (getattr(env, 'eval_mode', False)
+            and not getattr(env, 'render_freq', 1)
+            and getattr(env, 'eval_video_path', None) is None
+            and not getattr(env, 'crazy_random_light', True)
+            and not getattr(env, 'save_data', True))
+
+
+def capture_stm_observation(env):
+    """Same RGB conversion and joint state; omit unused metadata/now_obs copy.
+
+    The caller still snapshots model inputs when inserting into the STM buffer.
+    This path is only used without video, whose implementation reads now_obs.
+    """
+    env._update_render()
+    env.cameras.update_picture()
+    rgb = env.cameras.get_rgb()
+    state = np.array(env.robot.get_left_arm_jointState()
+                     + env.robot.get_right_arm_jointState())
+    return {'observation': rgb, 'joint_action': {'vector': state}}
+
+
+def take_action_with_deferred_render(env, action, enabled):
+    """Defer render-only pose synchronization, never physics or success checks.
+
+    Any get_obs inside take_action (including early success) restores the real
+    render updater while capturing. Original instance attributes are restored
+    even if planning, stepping, or image capture raises.
+    """
+    if not enabled or not stm_observation_fastpath_allowed(env):
+        return env.take_action(action)
+    original_update, original_get_obs = env._update_render, env.get_obs
+    missing = object()
+    old_update = vars(env).get('_update_render', missing)
+    old_get_obs = vars(env).get('get_obs', missing)
+
+    def defer():
+        pass
+
+    def capture(*args, **kwargs):
+        env._update_render = original_update
+        try:
+            return original_get_obs(*args, **kwargs)
+        finally:
+            env._update_render = defer
+
+    env._update_render, env.get_obs = defer, capture
+    try:
+        return env.take_action(action)
+    finally:
+        for name, value in (('_update_render', old_update), ('get_obs', old_get_obs)):
+            if value is missing:
+                delattr(env, name)
+            else:
+                setattr(env, name, value)
+
+
 def class_decorator(task_name):
     envs_module = importlib.import_module(f"envs.{task_name}")
     try:
@@ -324,13 +382,27 @@ def eval_policy(task_name,
         # Skipping get_obs would change random-light RNG draws and video output.
         temporal_sparse = (
             temporal_enabled
-            and not args['domain_randomization'].get('crazy_random_light', False)
+            and stm_observation_fastpath_allowed(TASK_ENV)
             and not args.get('eval_video_log', False)
         )
         cached_observation = None
+        last_recorded_observation = None
+        temporal_fastpath = (temporal_sparse
+                             and os.environ.get('ROBOTWIN_STM_FAST_OBSERVATIONS', '1') == '1')
+
+        def capture_observation():
+            if temporal_fastpath:
+                return capture_stm_observation(TASK_ENV)
+            return TASK_ENV.get_obs()
+
+        print(f'STM_OBSERVATION fastpath={temporal_fastpath}', flush=True)
         print(f'STM_CAPTURE mode={"tail16" if temporal_sparse else "dense"}', flush=True)
 
         def record_temporal_frame(obs):
+            nonlocal last_recorded_observation
+            # A cached boundary observation already has an immutable snapshot.
+            if obs is last_recorded_observation:
+                return temporal_frames[-1]
             frame = {
                 'observation.images.cam_high': obs['observation']['head_camera']['rgb'],
                 'observation.images.cam_left_wrist': obs['observation']['left_camera']['rgb'],
@@ -344,11 +416,12 @@ def eval_policy(task_name,
             if temporal_frames and temporal_frames[-1]['timestamp'] == frame['timestamp']:
                 temporal_frames.pop()
             temporal_frames.append(frame)
+            last_recorded_observation = obs
             return frame
 
         while TASK_ENV.take_action_cnt<TASK_ENV.step_lim and not succ:
             observation = (cached_observation if temporal_sparse and cached_observation is not None
-                           else TASK_ENV.get_obs())
+                           else capture_observation())
             cached_observation = None
             # from IPython import embed;embed()
             
@@ -407,12 +480,12 @@ def eval_policy(task_name,
                         pass
                     else:
                         initial_obs = True
-                    TASK_ENV.take_action(act)
+                    take_action_with_deferred_render(TASK_ENV, act, temporal_fastpath)
                     executed_count += 1
                     if (temporal_enabled and not TASK_ENV.eval_success
                             and (not temporal_sparse or temporal_capture_required(TASK_ENV.take_action_cnt, chunk_end))):
                         capture_started = time.perf_counter()
-                        cached_observation = TASK_ENV.get_obs()
+                        cached_observation = capture_observation()
                         record_temporal_frame(cached_observation)
                         capture_seconds += time.perf_counter() - capture_started
                         capture_count += 1
@@ -420,11 +493,11 @@ def eval_policy(task_name,
                         succ = True
                         break
             else:
-                TASK_ENV.take_action(action)
+                take_action_with_deferred_render(TASK_ENV, action, temporal_fastpath)
                 executed_count = 1
                 if temporal_enabled and not TASK_ENV.eval_success:
                     capture_started = time.perf_counter()
-                    cached_observation = TASK_ENV.get_obs()
+                    cached_observation = capture_observation()
                     record_temporal_frame(cached_observation)
                     capture_seconds += time.perf_counter() - capture_started
                     capture_count += 1

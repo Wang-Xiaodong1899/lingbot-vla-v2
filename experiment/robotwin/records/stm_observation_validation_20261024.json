@@ -1,0 +1,31 @@
+{
+  "measurements": {
+    "baseline": {
+      "elapsed_s": 0.09932181239128113,
+      "render_sync_calls": 44,
+      "physics_steps": 35,
+      "success_checks": 35
+    },
+    "optimized": {
+      "elapsed_s": 0.09795911982655525,
+      "render_sync_calls": 4,
+      "physics_steps": 35,
+      "success_checks": 35
+    }
+  },
+  "pixels_exact": true,
+  "states_exact": true,
+  "image_range": [
+    67,
+    192
+  ],
+  "moving_pixels": 11303,
+  "max_pixel_difference": 0,
+  "rt_samples": 32,
+  "path_depth": 8,
+  "denoiser": "oidn",
+  "scope": "synthetic moving rigid body and three 128x128 cameras; includes capture on early success",
+  "checked_at": "2026-10-24T04:45:56.137296+00:00",
+  "unit_tests_passed": 10,
+  "performance_interpretation": "Warm synthetic scene only; no full-task speedup claim."
+}
